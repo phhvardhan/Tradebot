@@ -15,6 +15,21 @@
 <div class="kpi"><span class="label">Needs a decision</span><span id="todo" class="val num">—</span><span id="todo-sub" class="sub">—</span></div>
 </div></section>
 
+<section class="card" id="agent" aria-label="Alpaca paper orders" hidden>
+<div class="agent-head"><h2 class="card-title">Alpaca paper orders<span class="sub" id="agent-sub">paper account only</span></h2>
+<div class="seg" id="agent-mode" role="group" aria-label="How orders are placed"><button type="button" data-mode="off" aria-pressed="false">Off</button><button type="button" data-mode="ask" aria-pressed="false">Ask me</button><button type="button" data-mode="auto" aria-pressed="false">Automatic</button></div></div>
+<p id="agent-mode-text" class="dim sub"></p>
+<form id="agent-form" class="rules-form agent-form">
+<label>Amount per trade ($)<input id="a-per_trade" type="number" min="1" step="any" inputmode="decimal" required></label>
+<label>New buys a day<input id="a-max_new" type="number" min="0" max="40" step="1" inputmode="numeric" required><small>0 = no limit.</small></label>
+<label>No new buys once down ($)<input id="a-daily_loss" type="number" min="0" step="any" inputmode="decimal" required><small>Today, at Alpaca. 0 = off.</small></label>
+<div class="agent-save"><button type="submit">Save limits</button><span id="agent-msg" class="dim sub" role="status"></span></div>
+</form>
+<p class="dim sub">A buy is a bracket order: whole shares at market, with the stop and target from the US stocks rules placed at Alpaca as orders that stay open until filled or cancelled, so they work even when this computer is off. Proposals, checks and limits are the cards below.</p>
+<div class="wrap"><table class="grid"><thead><tr><th>Sent</th><th>Order</th><th>How</th><th>Result</th></tr></thead><tbody id="order-rows"></tbody></table></div>
+<p id="orders-empty" class="dim">No orders sent yet.</p>
+</section>
+
 <section><h2 class="card-title">Act now<span class="sub" id="cards-sub">proposals from the last check · you place the order</span></h2>
 <div id="cards" class="desk-cards"></div><p id="cards-empty" class="dim">Nothing needs a decision right now.</p></section>
 
@@ -23,6 +38,6 @@
 <p id="watch-empty" class="dim">No holdings imported yet.</p>
 <p class="dim sub" style="margin-top:14px">Import a brokerage CSV with <code>python3 -m signaldesk.desk import FILE.csv</code>, then tag a lot as a swing trade with <code>python3 -m signaldesk.desk tag SYM swing --entry E --stop S --target T</code>. Swing exits apply only to lots tagged swing; investments are never sold by a swing rule.</p></section>
 
-<footer id="foot">Nothing is placed from here: you decide, you place the order with your broker, then re-import. Prices are free Yahoo quotes with their quote time shown and can lag. A stop can fill at a worse price than the stop level, so every loss here is an estimate. Not investment advice.</footer>
+<footer id="foot">With Alpaca connected, orders go to the Alpaca paper account only, in the mode you choose above; otherwise nothing is placed from here. Prices are free Yahoo quotes with their quote time shown and can lag. A stop can fill at a worse price than the stop level, so every loss here is an estimate. Not investment advice.</footer>
 </main></div></div>
 <script src="/ui.js"></script><script src="/desk.js"></script></body></html>

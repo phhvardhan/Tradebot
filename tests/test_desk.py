@@ -185,7 +185,7 @@ class AlpacaTests(unittest.TestCase):
     def test_broker_positions_and_cash_are_the_truth_and_fills_say_when_each_holding_started(self):
         page = [fill(3, '2026-11-10T15:00:00.123456789Z', 'buy', '3', '101'), fill(2, '2026-10-02T15:00:00Z', 'sell', '2', '120'), fill(1, '2026-10-01T15:00:00Z', 'buy', '2', '100')]
         get, calls = fake_alpaca([page])
-        label, cash, positions, fills, notes = desk.read_alpaca(get)
+        label, cash, positions, fills, notes, _ = desk.read_alpaca(get)
         self.assertTrue(label.endswith('9876')); self.assertEqual(cash, D('1234.5'))
         self.assertEqual([(p['symbol'], p['qty'], p['avg_cost'], p['since']) for p in positions], [('AAPL', D('3'), D('101.2346'), '2026-11-10')])  # flat on 10-02, bought again 11-10
         self.assertEqual([f['side'] for f in fills], ['BUY', 'SELL', 'BUY'])                                  # oldest first
@@ -195,7 +195,7 @@ class AlpacaTests(unittest.TestCase):
     def test_fill_history_is_read_page_by_page(self):
         first = [fill(200 - i, f'2026-11-{10 - i % 9:02d}T15:00:00Z', 'buy', '1', '100') for i in range(100)]
         get, calls = fake_alpaca([first, [fill(0, '2026-01-02T15:00:00Z', 'buy', '1', '90')]])
-        _, _, _, fills, _ = desk.read_alpaca(get)
+        _, _, _, fills, _, _ = desk.read_alpaca(get)
         self.assertEqual(len(fills), 101)
         self.assertEqual(calls[-1][1]['page_token'], first[-1]['id'])
 
@@ -230,6 +230,113 @@ class AlpacaTests(unittest.TestCase):
             desk.alpaca_get('/v2/account')
         self.assertEqual((sent[0].get_method(), sent[0].full_url), ('GET', 'https://paper-api.alpaca.markets/v2/account'))
         self.assertIsNone(sent[0].data)
+
+class FakeAlpaca:
+    """Alpaca's paper API in memory: GETs read state, POST /v2/orders records the order and fills a buy at once."""
+    def __init__(self, positions=(), open_orders=(), equity='100000', last_equity='100000', refuse=None):
+        self.positions, self.open_orders, self.sent, self.refuse = [dict(p) for p in positions], list(open_orders), [], refuse
+        self.acct = dict(account_number='PA1234', cash='100000', equity=equity, last_equity=last_equity)
+    def get(self, path, params=None):
+        return {'/v2/account': self.acct, '/v2/positions': self.positions, '/v2/orders': self.open_orders}.get(path, [])
+    def send(self, method, path, body=None):
+        self.sent.append((method, path, body))
+        if self.refuse:
+            raise ValueError(self.refuse)
+        if body['side'] == 'buy':
+            self.positions.append(dict(symbol=body['symbol'], qty=body['qty'], avg_entry_price='101.10', side='long', asset_class='us_equity'))
+        return dict(id='ord-1', status='accepted')
+
+class AgentTests(unittest.TestCase):
+    KEYS = {'ALPACA_KEY_ID': 'k', 'ALPACA_SECRET_KEY': 's'}
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.env = patch.object(desk, 'secret', lambda name: self.KEYS.get(name)); self.env.start(); self.addCleanup(self.env.stop)
+    def make(self, fake, mode='ask', market_open=True, **kw):
+        e = engine(prices={'KO': (101, closes(101))}, market_open=market_open, **kw)
+        for q in e.s['quotes'].values():
+            q[3] = time.time()                                                                           # a fresh quote
+        d = desk.Desk(e, Path(self.tmp.name) / 'h.json', get=fake.get, send=fake.send)
+        self.assertIsNone(d.set_rules(dict(mode=mode, per_trade='1000')))
+        d.sync()
+        return d
+
+    def test_ask_mode_places_a_whole_share_bracket_once_and_the_lot_becomes_a_swing_trade_held_at_alpaca(self):
+        fake = FakeAlpaca(); d = self.make(fake)
+        card = d.snapshot()['cards'][0]
+        self.assertEqual((card['symbol'], card['qty'], card['can_place']), ('KO', '9', True))              # $1000 / 101 = 9 whole shares
+        self.assertIsNone(d.order(dict(symbol='KO', side='buy')))
+        method, path, body = fake.sent[0]
+        self.assertEqual((method, path), ('POST', '/v2/orders'))
+        self.assertEqual({k: body[k] for k in ('symbol', 'qty', 'side', 'type', 'time_in_force', 'order_class')},
+                         dict(symbol='KO', qty='9', side='buy', type='market', time_in_force='gtc', order_class='bracket'))
+        self.assertEqual((body['stop_loss']['stop_price'], body['take_profit']['limit_price']), ('90.90', '126.25'))
+        self.assertTrue(body['client_order_id'].startswith('sd-buy-KO-'))
+        ko = next(p for p in desk.load(d.path)['positions'] if p['symbol'] == 'KO')
+        self.assertEqual((ko['purpose'], ko['plan']['bracket'], ko['plan']['stop']), ('swing', True, '90.90'))
+        self.assertIsNotNone(d.order(dict(symbol='KO', side='buy')))                                     # a second click sends nothing
+        self.assertEqual(len(fake.sent), 1)
+        self.assertEqual(d.snapshot()['agent']['orders'][0]['symbol'], 'KO')
+
+    def test_off_mode_a_failing_card_and_a_live_account_send_nothing(self):
+        fake = FakeAlpaca(); d = self.make(fake, mode='off')
+        self.assertIn('off', d.order(dict(symbol='KO', side='buy')))
+        d = self.make(fake, market_open=False)
+        self.assertIn('Market closed', d.order(dict(symbol='KO', side='buy')))
+        d = self.make(fake)
+        with patch.object(desk, 'secret', lambda name: dict(self.KEYS, ALPACA_LIVE='1').get(name)):
+            self.assertIn('paper account only', d.order(dict(symbol='KO', side='buy')))
+        self.assertEqual(fake.sent, [])
+
+    def test_a_bracket_lot_under_its_stop_gets_no_sell_card_because_alpaca_holds_the_stop(self):
+        fake = FakeAlpaca(); d = self.make(fake)
+        d.order(dict(symbol='KO', side='buy'))
+        d.stocks.s['quotes']['KO'] = ['80', '80', closes(80), time.time()]
+        self.assertEqual([c for c in d.snapshot()['cards'] if c['action'] == 'SELL'], [])
+
+    def test_a_manual_swing_lot_sells_its_shares_but_never_over_open_orders(self):
+        fake = FakeAlpaca(positions=[dict(symbol='KO', qty='4.5', avg_entry_price='100', side='long', asset_class='us_equity')], open_orders=[dict(id='x')])
+        d = self.make(fake)
+        h = desk.load(d.path); desk.tag(h, 'KO', 'swing', dict(entry='100', stop='90', target='125')); desk.save(h, d.path)
+        d.stocks.s['quotes']['KO'] = ['89', '89', closes(89), time.time()]
+        self.assertIn('open order', d.order(dict(symbol='KO', side='sell')))
+        fake.open_orders.clear()
+        self.assertIsNone(d.order(dict(symbol='KO', side='sell')))
+        self.assertEqual({k: fake.sent[-1][2][k] for k in ('side', 'qty', 'type', 'time_in_force')}, dict(side='sell', qty='4.5', type='market', time_in_force='day'))
+
+    def test_automatic_mode_places_passing_orders_only_in_session_and_ask_mode_never_does(self):
+        fake = FakeAlpaca(); d = self.make(fake, mode='ask'); d.auto()
+        self.assertEqual(fake.sent, [])
+        d = self.make(fake, mode='auto', market_open=False); d.auto()
+        self.assertEqual(fake.sent, [])
+        d = self.make(fake, mode='auto'); d.auto(); d.auto()
+        self.assertEqual([b['symbol'] for _, _, b in fake.sent], ['KO'])                                   # once, not every round
+
+    def test_the_daily_loss_limit_and_a_refused_order_are_shown_not_hidden(self):
+        fake = FakeAlpaca(equity='99000', last_equity='100000'); d = self.make(fake)
+        self.assertIn('no new buys once down $500', ' '.join(k['text'] for k in d.snapshot()['cards'][0]['checks'] if not k['ok']))
+        fake = FakeAlpaca(refuse='Alpaca refused the order (403): insufficient buying power'); d = self.make(fake)
+        self.assertIn('insufficient buying power', d.order(dict(symbol='KO', side='buy')))
+        self.assertFalse(d.orders()[-1]['ok'])
+
+    def test_settings_are_validated(self):
+        d = self.make(FakeAlpaca())
+        self.assertIn('Mode', d.set_rules(dict(mode='yolo')))
+        self.assertIn('Amount per trade', d.set_rules(dict(per_trade='0')))
+        self.assertIn('whole number', d.set_rules(dict(max_new='1.5')))
+        self.assertIsNone(d.set_rules(dict(mode='auto', per_trade='2500', max_new='2', daily_loss='0')))
+        self.assertEqual(d.settings(), dict(mode='auto', per_trade='2500', max_new='2', daily_loss='0'))
+
+    def test_the_order_sender_only_reaches_the_paper_endpoint(self):
+        sent = []
+        class Res:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self, *a): return b'{"id": "1"}'
+        with patch.object(desk, 'urlopen', lambda req, timeout: sent.append(req) or Res()):
+            desk.alpaca_send('POST', '/v2/orders', dict(symbol='KO'))
+            with patch.object(desk, 'secret', lambda name: dict(self.KEYS, ALPACA_LIVE='1').get(name)):
+                self.assertRaises(ValueError, desk.alpaca_send, 'POST', '/v2/orders', dict(symbol='KO'))
+        self.assertEqual([(r.get_method(), r.full_url) for r in sent], [('POST', 'https://paper-api.alpaca.markets/v2/orders')])
 
 class HostTests(unittest.TestCase):
     def test_only_loopback_and_listed_private_names_are_answered(self):

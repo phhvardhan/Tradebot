@@ -81,6 +81,13 @@ def serve(markets, port, account, static=None):
                     body = None
                 error = markets[market][0].set_rules(body) if isinstance(body, dict) else 'Expected a JSON object.'
                 return self.send(error.encode(), 'text/plain', 400) if error else self.send(b'{"ok":true}')
+            if action == 'order' and hasattr(markets.get(market, (None,))[0], 'order'):
+                try:
+                    body = json.loads(self.rfile.read(max(0, min(int(self.headers.get('Content-Length') or 0), 10000))))
+                except ValueError:
+                    body = None
+                error = markets[market][0].order(body)
+                return self.send(error.encode(), 'text/plain', 400) if error else self.send(b'{"ok":true}')
             if market not in markets or not markets[market][0].control('/api/' + action):
                 return self.send(b'Unknown action or pause first', 'text/plain', 400)
             self.send(b'{"ok":true}')

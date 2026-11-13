@@ -19,6 +19,7 @@ from datetime import date, datetime, timezone
 from decimal import InvalidOperation, ROUND_DOWN
 from pathlib import Path
 from urllib.parse import urlencode
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from .core import D, ROOT, secret
@@ -28,6 +29,8 @@ from .swing import SECTOR, STALE
 HOLDINGS = ROOT / 'data' / 'holdings.json'
 SYNC_EVERY = 5 * 60    # the server re-reads the broker this often when Alpaca keys are set
 SYNC_OLD = 24 * 3600   # a snapshot older than this is flagged: trades since then are unknown here
+MODES = {'off': 'Off: suggestions only', 'ask': 'Ask me: a Place order button on each card that passes', 'auto': 'Automatic: the agent places paper orders within these limits'}
+SETTINGS = dict(mode='ask', per_trade='1000', max_new='3', daily_loss='500')  # the Alpaca paper agent's own limits; stop and target come from the US stocks rules
 QUOTE_OLD = STALE + 120  # in session, a desk card on a quote older than this fails: the agent checks every minute, so it means the feed stopped
 
 def load(path=HOLDINGS):
@@ -43,7 +46,7 @@ def save(h, path=HOLDINGS):
     tmp.write_text(json.dumps(h, indent=1))
     tmp.replace(path)
 
-def snapshot(account, cash, positions, fills, source, previous=None, notes=(), synced_at=None):
+def snapshot(account, cash, positions, fills, source, previous=None, notes=(), synced_at=None, **extra):
     """The holdings record; positions are {symbol, qty, avg_cost, since}. A symbol's purpose and swing plan survive a re-import only while it is the same
     holding: if it was sold out and bought again (a new `since`), the old tag and its stop and target are dropped and it starts as an investment.
     `synced_at` is when the data was exported (the CSV's file time), not when it was imported."""
@@ -56,7 +59,7 @@ def snapshot(account, cash, positions, fills, source, previous=None, notes=(), s
             notes.append(f'{p["symbol"]}: sold out and bought again on {since}, so its old swing tag and plan were dropped. Tag it again if this lot is a swing trade.')
         rows.append(dict(symbol=p['symbol'], qty=str(p['qty']), avg_cost=None if p.get('avg_cost') is None else str(p['avg_cost']), since=since,
                          purpose=old.get('purpose', 'invest') if same else 'invest', plan=old.get('plan') if same else None))
-    return dict(account=account, source=source, synced_at=synced_at or time.time(), cash=None if cash is None else str(cash), positions=sorted(rows, key=lambda p: p['symbol']), fills=list(fills), notes=notes)
+    return dict(account=account, source=source, synced_at=synced_at or time.time(), cash=None if cash is None else str(cash), positions=sorted(rows, key=lambda p: p['symbol']), fills=list(fills), notes=notes, **extra)
 
 def iso(text):
     for fmt in ('%Y-%m-%d', '%m/%d/%Y'):
@@ -115,8 +118,27 @@ def alpaca_get(path, params=None):
     if not key or not sec:
         raise ValueError('Alpaca keys are not set: put ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env')
     url = ALPACA['live' if secret('ALPACA_LIVE') == '1' else 'paper'] + path + ('?' + urlencode(params) if params else '')
-    with urlopen(Request(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': sec, 'Accept': 'application/json', 'User-Agent': 'signaldesk'}), timeout=15) as r:
-        return json.load(r)
+    try:
+        with urlopen(Request(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': sec, 'Accept': 'application/json', 'User-Agent': 'signaldesk'}), timeout=15) as r:
+            return json.load(r)
+    except HTTPError as exc:
+        raise ValueError(f'Alpaca answered {exc.code}: {exc.read().decode(errors="replace")[:300]}') from None
+
+def alpaca_send(method, path, body=None):
+    """One write to Alpaca: PAPER ONLY. The URL is the paper endpoint whatever .env says, and a live setting refuses before anything is sent."""
+    if secret('ALPACA_LIVE') == '1':
+        raise ValueError('Placing orders works on the Alpaca paper account only; ALPACA_LIVE=1 is set, so nothing was sent.')
+    key, sec = secret('ALPACA_KEY_ID'), secret('ALPACA_SECRET_KEY')
+    if not key or not sec:
+        raise ValueError('Alpaca keys are not set: put ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env')
+    req = Request(ALPACA['paper'] + path, data=None if body is None else json.dumps(body).encode(), method=method,
+                  headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': sec, 'Accept': 'application/json', 'Content-Type': 'application/json', 'User-Agent': 'signaldesk'})
+    try:
+        with urlopen(req, timeout=15) as r:
+            raw = r.read()
+            return json.loads(raw) if raw.strip() else {}  # a cancel answers 204 with no body
+    except HTTPError as exc:
+        raise ValueError(f'Alpaca refused the order ({exc.code}): {exc.read().decode(errors="replace")[:300]}') from None
 
 def read_alpaca(get=alpaca_get):
     """(account label, cash, positions, fills oldest first, notes) from Alpaca. The broker's positions and average cost are the truth;
@@ -141,12 +163,13 @@ def read_alpaca(get=alpaca_get):
             continue
         positions.append(dict(symbol=p['symbol'], qty=D(str(p['qty'])), avg_cost=D(str(p['avg_entry_price'])).quantize(D('.0001')), since=since.get(p['symbol'])))
     mode = 'live' if secret('ALPACA_LIVE') == '1' else 'paper'
-    return f'Alpaca {mode} ••••{str(acct.get("account_number", ""))[-4:]}', D(str(acct['cash'])), positions, rows, notes
+    day_change = D(str(acct['equity'])) - D(str(acct['last_equity'])) if acct.get('equity') and acct.get('last_equity') else None
+    return f'Alpaca {mode} ••••{str(acct.get("account_number", ""))[-4:]}', D(str(acct['cash'])), positions, rows, notes, day_change
 
 def sync_alpaca(path=HOLDINGS, get=alpaca_get):
     """Replace the holdings with Alpaca's, keeping each holding's tag while it stays open. Returns the new record."""
-    label, cash, positions, fills, notes = read_alpaca(get)
-    h = snapshot(label, cash, positions, fills, 'alpaca (read-only API)', previous=load(path), notes=notes)
+    label, cash, positions, fills, notes, day_change = read_alpaca(get)
+    h = snapshot(label, cash, positions, fills, 'alpaca (read-only API)', previous=load(path), notes=notes, day_change=None if day_change is None else str(day_change))
     save(h, path)
     return h
 
@@ -172,14 +195,18 @@ def text(why):
     t = why.removeprefix('Signal, but ').removeprefix('entries blocked: ')
     return t[0].upper() + t[1:]
 
-def actions(h, e, now=None):
+def actions(h, e, now=None, settings=None, bought=()):
     """What needs attention: sells for swing lots at their stop or target, buys for today's breakouts, each re-checked against the real account and your rules;
-    plus the holdings being watched and every reason the picture may be incomplete. `e` is the stocks engine (rules, last quotes, replay gate)."""
+    plus the holdings being watched and every reason the picture may be incomplete. `e` is the stocks engine (rules, last quotes, replay gate).
+    `settings` (the Alpaca agent's limits) replaces the stock agent's size and buys-a-day; `bought` lists the symbols the agent already bought today."""
     now = now or time.time()
     with e.lock:
         s = e.s
         quotes, decisions, updated, day, market = dict(s.get('quotes') or {}), dict(s.get('decisions') or {}), s.get('updated'), s.get('day'), dict(s.get('market') or {})
         symbols, r = list(e.symbols), e.rules()
+    if settings:
+        r = dict(r, per_trade=D(settings['per_trade']), max_new=D(settings['max_new']))
+    alpaca = bool(h) and str(h.get('source', '')).startswith('alpaca')  # bracket orders there take whole shares
     out = dict(holdings=h, rules={k: str(v) for k, v in r.items()}, updated=updated, market=market, cards=[], watching=[], notes=[])
     positions = (h or {}).get('positions', [])
     if not h:
@@ -217,6 +244,8 @@ def actions(h, e, now=None):
             row.update(plan=plan, to_stop=str(price / stop - 1), to_target=str(target / price - 1))
             reason = (f'Stop: {price:.2f} is at or under your stop {stop:.2f} (entry {entry:.2f}, {price / entry - 1:+.1%}).' if price <= stop else
                       f'Target: {price:.2f} reached your target {target:.2f} (entry {entry:.2f}, {price / entry - 1:+.1%}).' if price >= target else None)
+            if plan.get('bracket'):
+                reason = None  # Alpaca holds this lot's stop and target as orders: they fill there, a second sale from here would oversell
             if reason:
                 out['cards'].append(dict(action='SELL', symbol=p['symbol'], trigger=reason, price=str(price), quote_at=at, qty=str(qty), proceeds=str(qty * price), est_pnl=str(qty * (price - entry)),
                                          est_note='At this quote. A stop order can fill below the stop price, so the result is an estimate until the fill.',
@@ -231,8 +260,15 @@ def actions(h, e, now=None):
             continue  # the same test the paper agent runs, on the closes it saved: yesterday's close above the 20 before it
         price, closes, at = D(q[0]), q[2], q[3] if len(q) > 3 else None
         checks = [dict(ok=sym not in [p['symbol'] for p in swing], text='Already in a swing trade on it' if sym in [p['symbol'] for p in swing] else 'No open swing trade on it')]
+        if alpaca and sym in [p['symbol'] for p in positions] and sym not in [p['symbol'] for p in swing]:
+            checks.append(dict(ok=False, text=f'Already hold {sym} at Alpaca'))
+        if alpaca and sym in bought:
+            checks.append(dict(ok=False, text='Order already sent today'))
+        if settings and D(settings['daily_loss']) and h and h.get('day_change') is not None:
+            change, limit = D(h['day_change']), D(settings['daily_loss'])
+            checks.append(dict(ok=change > -limit, text=f'Today {change:+.2f} at Alpaca (no new buys once down ${limit:.0f})'))
         if r['max_new']:
-            n = sum(p['plan'].get('opened') == today for p in swing)
+            n = max(sum(p['plan'].get('opened') == today for p in swing), len(set(bought)))
             checks.append(dict(ok=n < r['max_new'], text=f'{n} of {r["max_new"]:.0f} new buys today'))
         if r['max_open']:
             checks.append(dict(ok=len(swing) < r['max_open'], text=f'{len(swing)} of {r["max_open"]:.0f} swing positions open'))
@@ -250,9 +286,10 @@ def actions(h, e, now=None):
         budget = r['per_trade'] or (cash if cash and cash >= 1 else D(0))
         if cash is not None and cash >= 1:
             budget = min(budget, cash)  # with no cash the card still shows what the rule would size, and the cash check fails
-        qty = (budget / price).quantize(D('.0001'), rounding=ROUND_DOWN) if budget > 0 else D(0)
+        qty = (budget / price).quantize(D(1) if alpaca else D('.0001'), rounding=ROUND_DOWN) if budget > 0 else D(0)
         if qty <= 0:
-            checks.append(dict(ok=False, text='Size is 0 shares: set a per-position cap on the US stocks page, or import your cash'))
+            checks.append(dict(ok=False, text=f'Size is 0 shares: one share costs more than ${budget:.0f} a trade' if alpaca and budget > 0 else
+                                              'Size is 0 shares: set a per-position cap on the US stocks page, or import your cash'))
         stop_px, target_px = price * (1 - r['stop']), price * (1 + r['target'])
         out['cards'].append(dict(action='BUY', symbol=sym, trigger=f'Close {closes[-1]:.2f} broke the 20-day closing high {max(closes[-21:-1]):.2f}. Agent: {decisions.get(sym, "—")}',
                                  price=str(price), quote_at=at, qty=str(qty), cost=str(qty * price), stop=str(stop_px), target=str(target_px), est_loss=str(qty * (price - stop_px)),
@@ -270,12 +307,144 @@ class Held:
     def __iter__(self):
         return iter([p['symbol'] for p in (load(self.path) or {}).get('positions', [])])
 
+def cents(x):
+    return str(D(x).quantize(D('.01')))
+
 class Desk:
-    """The 'market' behind /desk: no agent of its own. Every request reads the holdings file and the stocks agent's last check."""
-    def __init__(self, stocks, path=HOLDINGS, get=alpaca_get):
-        self.stocks, self.path, self.running, self.error, self.get = stocks, Path(path), False, None, get
-        self.lock, self.wake = threading.Lock(), threading.Event()
+    """The 'market' behind /desk. Every request reads the holdings file and the stocks agent's last check. With Alpaca keys it syncs every 5 minutes and,
+    in 'ask' or 'auto' mode, places paper orders: a buy is a bracket (market entry, stop and target held at Alpaca as orders that stay open until filled
+    or cancelled), a sale is a market order for a swing lot that has no bracket. Every attempt is a line in data/orders-alpaca.jsonl."""
+    def __init__(self, stocks, path=HOLDINGS, get=alpaca_get, send=alpaca_send):
+        self.stocks, self.path, self.running, self.error, self.get, self.send = stocks, Path(path), False, None, get, send
+        self.lock, self.wake, self.order_error = threading.RLock(), threading.Event(), None
+        self.settings_path, self.log_path = self.path.parent / 'desk-settings.json', self.path.parent / 'orders-alpaca.jsonl'
         stocks.extra = Held(self.path)  # held but not on the watchlist: quoted at every check, never traded
+
+    def settings(self):
+        try:
+            saved = json.loads(self.settings_path.read_text())
+        except (OSError, ValueError):
+            saved = {}
+        return {k: str(saved.get(k, v)) for k, v in SETTINGS.items()}
+
+    def set_rules(self, body):
+        """Change the Alpaca agent's mode and limits from the page. Returns an error text, or None once saved."""
+        new = self.settings()
+        try:
+            for k, v in body.items():
+                if k == 'mode':
+                    if v not in MODES:
+                        return 'Mode must be off, ask or auto.'
+                    new[k] = v
+                elif k in ('per_trade', 'daily_loss', 'max_new'):
+                    x = D(str(v))
+                    if not x.is_finite() or x < 0 or (k == 'per_trade' and not 0 < x <= 1_000_000) or (k == 'max_new' and (x > 40 or x != x.to_integral_value())):
+                        return {'per_trade': 'Amount per trade must be above $0 and at most $1,000,000.', 'daily_loss': 'Daily loss limit must be 0 (off) or more.',
+                                'max_new': 'New buys a day must be a whole number, 0 (no limit) to 40.'}[k]
+                    new[k] = str(x)
+                else:
+                    return f'Unknown setting: {k}.'
+        except (InvalidOperation, AttributeError):
+            return 'Settings must be numbers.'
+        tmp = Path(str(self.settings_path) + '.tmp')
+        tmp.write_text(json.dumps(new, indent=1)); tmp.replace(self.settings_path)
+        self.record(dict(event='settings', **new))
+        self.wake.set()  # automatic mode acts at once, not at the next interval
+
+    def record(self, row):
+        with open(self.log_path, 'a') as f:
+            f.write(json.dumps(dict(at=time.time(), **row), default=str) + '\n')
+
+    def orders(self, n=None):
+        try:
+            rows = [json.loads(line) for line in self.log_path.read_text().splitlines() if line.strip()]
+        except (OSError, ValueError):
+            return []
+        return rows[-n:] if n else rows
+
+    def today(self):
+        return (self.stocks.s.get('market') or {}).get('date') or self.stocks.s.get('day') or str(date.today())
+
+    def bought_today(self):
+        day = self.today()
+        return [o['symbol'] for o in self.orders() if o.get('event') == 'order' and o.get('side') == 'buy' and o.get('ok') and o.get('day') == day]
+
+    def view(self, h=None):
+        st = self.settings()
+        return actions(load(self.path) if h is None else h, self.stocks, settings=st, bought=self.bought_today()), st
+
+    def place(self, symbol, side, mode):
+        """Place the paper order the card for (symbol, side) proposes, after a fresh sync and a fresh check. Returns (ok, text)."""
+        with self.lock:
+            st = self.settings()
+            if st['mode'] == 'off' or (mode == 'auto' and st['mode'] != 'auto'):
+                return False, 'Order placing is off. Choose Ask me or Automatic first.'
+            if secret('ALPACA_LIVE') == '1':
+                return False, 'Orders are placed on the Alpaca paper account only, and ALPACA_LIVE=1 is set.'
+            self.sync()
+            if self.error:
+                return False, self.error
+            h = load(self.path)
+            if not h or not str(h.get('source', '')).startswith('alpaca'):
+                return False, 'The desk is not connected to Alpaca.'
+            out, _ = self.view(h)
+            card = next((c for c in out['cards'] if c['symbol'] == symbol and c['action'] == side.upper()), None)
+            if not card:
+                return False, f'No {side} proposal for {symbol} right now.'
+            if not card['passes']:
+                return False, f'{side.title()} {symbol} fails a check: ' + '; '.join(c['text'].rstrip('.') for c in card['checks'] if not c['ok']) + '.'
+            day, sym = self.today(), symbol
+            cid = f'sd-{side.lower()}-{sym}-{day}'  # one per symbol, side and day: Alpaca refuses a repeated id, so a retry can never double an order
+            if side.upper() == 'BUY':
+                qty = int(D(card['qty']))
+                body = dict(symbol=sym, qty=str(qty), side='buy', type='market', time_in_force='gtc', order_class='bracket', client_order_id=cid,
+                            take_profit=dict(limit_price=cents(card['target'])), stop_loss=dict(stop_price=cents(card['stop'])))
+                plan = dict(stop=cents(card['stop']), target=cents(card['target']), quote=card['price'])
+            else:
+                open_orders = self.get('/v2/orders', dict(status='open', symbols=sym))
+                if open_orders:
+                    return False, f'{len(open_orders)} open order(s) for {sym} at Alpaca already; manage them on Alpaca so this sale cannot oversell.'
+                held = next((p for p in self.get('/v2/positions') if p['symbol'] == sym and p.get('side', 'long') == 'long'), None)
+                if not held:
+                    return False, f'Alpaca shows no {sym} position to sell.'
+                qty = D(str(held['qty']))
+                body = dict(symbol=sym, qty=str(qty), side='sell', type='market', time_in_force='day', client_order_id=cid)
+                plan = None
+            try:
+                res = self.send('POST', '/v2/orders', body)
+            except Exception as exc:
+                self.record(dict(event='order', mode=mode, day=day, symbol=sym, side=side.lower(), qty=str(qty), ok=False, error=str(exc), request=body))
+                return False, str(exc)
+            self.record(dict(event='order', mode=mode, day=day, symbol=sym, side=side.lower(), qty=str(qty), ok=True, id=res.get('id'), status=res.get('status'), plan=plan, request=body))
+            self.sync()
+            return True, f'{side.title()} {qty} {sym} sent to Alpaca paper' + (f' with a stop at {plan["stop"]} and a target at {plan["target"]}.' if plan else '.')
+
+    def tag_brackets(self):
+        """A holding that came from one of the agent's bracket buys is a swing lot whose stop and target live at Alpaca."""
+        h = load(self.path)
+        if not h:
+            return
+        buys = {}
+        for o in self.orders():
+            if o.get('event') == 'order' and o.get('side') == 'buy' and o.get('ok') and o.get('plan'):
+                buys[o['symbol']] = o
+        changed = False
+        for p in h['positions']:
+            o = buys.get(p['symbol'])
+            if o and not p.get('plan') and (not p.get('since') or p['since'] >= o['day']):
+                p['purpose'], p['plan'] = 'swing', dict(entry=p['avg_cost'], stop=o['plan']['stop'], target=o['plan']['target'], opened=o['day'], bracket=True)
+                changed = True
+        if changed:
+            save(h, self.path)
+
+    def auto(self):
+        """Automatic mode: place every order whose card passes, sales first. The cards hold every limit; nothing else decides."""
+        if self.settings()['mode'] != 'auto' or not (self.stocks.s.get('market') or {}).get('open'):
+            return
+        out, _ = self.view()
+        for c in [c for c in out['cards'] if c['passes']]:
+            ok, msg = self.place(c['symbol'], c['action'], 'auto')
+            self.order_error = None if ok else f'Automatic order for {c["symbol"]} not placed: {msg}'
 
     def sync(self):
         """One broker read when Alpaca keys are set; a failure is kept for the page and retried at the next interval."""
@@ -283,6 +452,7 @@ class Desk:
             return
         try:
             sync_alpaca(self.path, self.get)
+            self.tag_brackets()
             self.error = None
         except Exception as exc:
             self.error = f'Alpaca sync failed: {type(exc).__name__}: {exc}. Holdings below are from the last good sync.'
@@ -290,16 +460,35 @@ class Desk:
     def worker(self):
         while True:
             self.sync()
+            try:
+                self.auto()
+            except Exception as exc:  # the sync loop must outlive one bad order attempt
+                self.order_error = f'Automatic orders stopped this round: {type(exc).__name__}: {exc}'
             self.wake.wait(SYNC_EVERY)
             self.wake.clear()
 
     def control(self, path):
         return False
 
+    def order(self, body):
+        """POST /api/desk/order from the page's Place order button. Returns an error text, or None once Alpaca accepted it."""
+        if not isinstance(body, dict) or body.get('side') not in ('buy', 'sell') or not isinstance(body.get('symbol'), str):
+            return 'Expected {symbol, side: buy or sell}.'
+        ok, msg = self.place(body['symbol'].upper(), body['side'], 'ask')
+        return None if ok else msg
+
     def snapshot(self):
-        out = actions(load(self.path), self.stocks)
-        if self.error:
-            out['notes'].insert(0, dict(kind='sync', text=self.error))
+        h = load(self.path)
+        out, st = self.view(h)
+        connected = bool(h) and str(h.get('source', '')).startswith('alpaca')
+        paper = connected and secret('ALPACA_LIVE') != '1'
+        for c in out['cards']:
+            c['can_place'] = paper and st['mode'] == 'ask' and c['passes']
+        out['agent'] = dict(settings=st, modes=MODES, connected=connected, paper=paper, error=self.order_error,
+                            orders=[o for o in self.orders(60) if o.get('event') == 'order'][-20:][::-1])
+        for k in (self.error, self.order_error):
+            if k:
+                out['notes'].insert(0, dict(kind='sync', text=k))
         return out
 
 def main(argv=None):

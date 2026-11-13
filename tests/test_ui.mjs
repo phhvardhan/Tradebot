@@ -37,9 +37,10 @@ console.log('stocks.js smoke test ok');
 // desk.js: the Action-needed page renders cards, notes and the watch table against a fake server without throwing.
 const deskState = { holdings: { account: 'Robinhood ••••1234', source: 'test', synced_at: Date.now() / 1000 - 60, cash: '2000', positions: [] }, rules: { per_trade: '500', stop: '0.1', target: '0.25', max_new: '3', max_open: '0' },
   updated: Date.now() / 1000, market: { open: true, date: '2026-11-12', reason: 'regular session' }, notes: [{ kind: 'cash', text: 'Cash is not in the import.' }],
-  cards: [{ action: 'BUY', symbol: 'KO', trigger: 'Close 101.00 broke the 20-day closing high 100.00.', price: '101', quote_at: Date.now() / 1000, qty: '4.9504', cost: '500', stop: '90.9', target: '126.25', est_loss: '50', est_note: 'estimate', checks: [{ ok: true, text: 'Market open' }, { ok: false, text: 'Cash $0.00' }], passes: false },
-    { action: 'SELL', symbol: 'AAPL', trigger: 'Stop', price: '89', quote_at: null, qty: '4', proceeds: '356', est_pnl: '-44', est_note: 'estimate', checks: [{ ok: true, text: 'Market open' }], passes: true }],
-  watching: [{ symbol: 'AAPL', purpose: 'swing', qty: '4', price: '89', value: '356', avg_cost: '100', gain: '-0.11', plan: { stop: '90', target: '125' }, to_stop: '-0.011' }, { symbol: 'XOM', purpose: 'invest', qty: '1', price: '80', value: '80', avg_cost: null, gain: null, plan: null }], unpriced: ['MSFT'] };
+  cards: [{ action: 'BUY', symbol: 'KO', trigger: 'Close 101.00 broke the 20-day closing high 100.00.', price: '101', quote_at: Date.now() / 1000, qty: '4.9504', cost: '500', stop: '90.9', target: '126.25', est_loss: '50', est_note: 'estimate', checks: [{ ok: true, text: 'Market open' }, { ok: false, text: 'Cash $0.00' }], passes: false, can_place: false },
+    { action: 'SELL', symbol: 'AAPL', trigger: 'Stop', price: '89', quote_at: null, qty: '4', proceeds: '356', est_pnl: '-44', est_note: 'estimate', checks: [{ ok: true, text: 'Market open' }], passes: true, can_place: true }],
+  watching: [{ symbol: 'AAPL', purpose: 'swing', qty: '4', price: '89', value: '356', avg_cost: '100', gain: '-0.11', plan: { stop: '90', target: '125' }, to_stop: '-0.011' }, { symbol: 'XOM', purpose: 'invest', qty: '1', price: '80', value: '80', avg_cost: null, gain: null, plan: null }], unpriced: ['MSFT'], agent: { connected: true, paper: true, error: null, modes: { off: 'Off', ask: 'Ask me', auto: 'Automatic' }, settings: { mode: 'ask', per_trade: '1000', max_new: '3', daily_loss: '500' },
+  orders: [{ at: Date.now() / 1000, symbol: 'KO', side: 'buy', qty: '9', mode: 'ask', ok: true, status: 'accepted', plan: { stop: '90.90', target: '126.25' } }, { at: Date.now() / 1000, symbol: 'V', side: 'buy', qty: '2', mode: 'auto', ok: false, error: 'refused' }] } };
 globalThis.location = { pathname: '/desk' };
 globalThis.fetch = async () => ({ ok: true, json: async () => structuredClone(deskState) });
 new Function(ui + '\n' + readFileSync(new URL('../static/desk.js', import.meta.url), 'utf8'))();
@@ -48,4 +49,8 @@ assert.equal(els.todo.textContent, '2');
 assert.match(els['todo-sub'].textContent, /1 pass/);
 assert.equal(els['cards-empty'].hidden, true);
 assert.match(els.synced.textContent, /value leaves out MSFT/);
+assert.equal(els.agent.hidden, false);
+assert.equal(els['orders-empty'].hidden, true);
+assert.equal(els['a-per_trade'].value, '1000');
+assert.match(els['agent-mode-text'].textContent, /Ask me/);
 console.log('desk.js smoke test ok');

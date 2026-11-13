@@ -39,6 +39,13 @@ Or double-click `Start Signal Desk.command`.
 - Or sync from Alpaca instead: put `ALPACA_KEY_ID` and `ALPACA_SECRET_KEY` in `.env` (copy `.env.example`, then `chmod 600 .env`; `ALPACA_LIVE=1` for a live account, else paper).
   The server then re-reads positions, average cost, cash and fills every 5 minutes, GET requests only; `python3 -m signaldesk.desk sync` does one by hand. It replaces a CSV import.
   Alpaca keys can trade even though the desk only reads, so keep them out of chats and version control. A failed sync is shown on the page; the last good holdings stay.
+- **Alpaca paper orders** (only with Alpaca connected, paper account only): the Action needed page has a switch. Off = suggestions only; Ask me = a Place order button
+  on each card that passes (two clicks: the first says exactly what will be sent); Automatic = the agent places every card that passes, checked every 5 minutes in session.
+  Its own limits are set there (amount per trade, new buys a day, no new buys once down $X today at Alpaca); stop, target and the breakout rule come from the US stocks rules.
+  A buy is a bracket order: whole shares at market, with the stop and target placed at Alpaca as orders that stay open until filled or cancelled, so they work even when this computer is off;
+  the lot is then tagged swing and gets no sell card from here. A sale (for a swing lot you tagged by hand) is a market order, refused while Alpaca has open orders on it.
+  The server re-checks the card before sending, one order per symbol, side and day; orders go to paper-api.alpaca.markets whatever .env says. Every attempt is in `data/orders-alpaca.jsonl`.
+  The US stocks, crypto, day-trade and funds pages stay fully simulated and never reach Alpaca.
 - Tag a lot: `python3 -m signaldesk.desk tag AAPL swing --entry 100 --stop 90 --target 125` (or `tag AAPL invest`). An investment and a swing trade can share a ticker; swing
   exits (stop, target) apply only to lots tagged swing. Investments are never sold by a swing rule. A tag survives re-imports while the holding stays open; selling out and buying again drops it.
 - Each card shows the trigger, the quote and its time, the proposed size, the planned stop and target, the estimated loss at the stop (an estimate: a stop can fill lower),
