@@ -24,6 +24,35 @@ class StockTests(unittest.TestCase):
         self.e.apply(day, {'AAA': q(price)}, True)
         return self.e.s['positions']['AAA']
 
+    def test_a_reported_split_adjusts_the_position_instead_of_reading_as_a_crash(self):
+        self.e.quotes = lambda *a: ({}, {})                                                    # a live engine
+        p = self.buy('2026-10-26', 110); qty, cost = D(p['qty']), D(p['cost'])
+        self.e.apply('2026-10-28', {'AAA': dict(q(28), splits=[('2026-10-28', D(4))])}, True)  # 4-for-1: 110 becomes 27.5, then up a little
+        p = self.e.s['positions']['AAA']
+        self.assertEqual((D(p['qty']), D(p['cost'])), (qty * 4, cost))
+        self.assertAlmostEqual(float(p['entry']), 110 * 1.0005 / 4, places=4)
+        self.assertEqual(self.sides(), [('AAA', 'BUY')])                                      # no false stop
+        self.e.apply('2026-10-29', {'AAA': dict(q(28), splits=[('2026-10-28', D(4))])}, True)
+        self.assertEqual(D(self.e.s['positions']['AAA']['qty']), qty * 4)                     # applied once
+        self.assertTrue(any('split 4-for-1' in a['text'] for a in self.e.s['alerts']))
+    def test_an_unexplained_jump_holds_exits_for_a_session_then_a_real_move_is_acted_on(self):
+        self.e.quotes = lambda *a: ({}, {})
+        self.buy('2026-10-26', 110)
+        self.e.apply('2026-10-27', {'AAA': q(11)}, True)                                       # a bad print, or a split Yahoo did not report
+        self.assertIn('AAA', self.e.s['positions'])
+        self.assertIn('exits wait a session', self.e.s['decisions']['AAA'])
+        self.assertEqual(sum('no split is reported' in a['text'] for a in self.e.s['alerts']), 1)
+        self.e.apply('2026-10-27', {'AAA': q(109)}, True)                                      # the quote comes back the same day: nothing happened
+        self.assertNotIn('suspect', self.e.s['positions']['AAA'])
+        self.e.apply('2026-10-27', {'AAA': q(50)}, True)                                       # a real collapse
+        self.assertIn('AAA', self.e.s['positions'])
+        self.e.apply('2026-10-28', {'AAA': q(50)}, True)                                       # still there next session, no split: the stop fires
+        self.assertNotIn('AAA', self.e.s['positions'])
+        self.assertIn('Stop', self.e.snapshot()['trades'][0]['reason'])
+    def test_the_replay_never_holds_exits_for_a_jump(self):
+        self.buy('2026-10-26', 110)                                                            # quotes=None: a replay
+        self.e.apply('2026-10-27', {'AAA': q(50)}, True)
+        self.assertNotIn('AAA', self.e.s['positions'])
     def test_breakout_buys_at_most_500_dollars(self):
         p = self.buy()
         self.assertLessEqual(D(p['cost']), D(500))

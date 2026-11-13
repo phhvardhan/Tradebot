@@ -18,15 +18,21 @@ def coinbase(path, params, product='BTC-USD'):
         return json.load(res)
 
 def yahoo_quotes(symbols, now, rng='3mo'):
-    """{SYM: closes, live price, quote time} from one Yahoo chart call each, plus per-symbol problems."""
+    """{SYM: closes, live price, quote time, splits} from one Yahoo chart call each, plus per-symbol problems.
+    splits: [(ex-date YYYY-MM-DD, new shares per old share)] inside the range, so a held position can be adjusted instead of reading a split as a crash."""
     out, problems = {}, {}
     for sym in symbols:
         try:
-            series = scan.parse_chart(scan.yahoo_get(scan.chart_path(sym, rng, '1d')), sym)
+            raw = scan.yahoo_get(scan.chart_path(sym, rng, '1d') + '&events=split')
+            doc = json.loads(raw) if isinstance(raw, (str, bytes)) else raw
+            series = scan.parse_chart(doc, sym)
             price, at = series['meta'].get('regularMarketPrice'), series['meta'].get('regularMarketTime')
             if not price or price <= 0 or not at:
                 raise ValueError('no price')
-            out[sym] = dict(closes=scan.daily_closes(series, now), price=D(str(price)), at=float(at))
+            events = ((doc['chart']['result'][0].get('events') or {}).get('splits') or {}).values()
+            splits = sorted((str(scan.ts_to_eastern(x['date']).date()), D(str(x['numerator'])) / D(str(x['denominator'])))
+                            for x in events if x.get('numerator') and x.get('denominator'))
+            out[sym] = dict(closes=scan.daily_closes(series, now), price=D(str(price)), at=float(at), splits=splits)
         except Exception as exc:
             problems[sym] = f'No quote: {exc}'
         time.sleep(scan.PAUSE)

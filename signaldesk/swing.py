@@ -29,6 +29,8 @@ STALE = 180
 
 GAP = D('.05')
 
+JUMP = D('.40')  # live only: a held price this far from the last price seen, with no split reported, is not acted on for a session
+
 DEFAULT_RULES = dict(stop=D('.10'), target=D('.25'), alert_at=D('.20'), max_new=D(3))
 
 
@@ -228,7 +230,27 @@ class StockEngine(Runner):
             if sym not in prices:
                 decisions[sym] = 'Holding: no fresh price, exits not checked.'
                 continue
-            price, qty = prices[sym], D(p['qty'])
+            price = prices[sym]
+            for ex, ratio in quotes[sym].get('splits', ()):  # a split since the buy: same money, more (or fewer) shares at a lower (or higher) price
+                if ex > p['opened'] and ex not in p.get('splits', []) and ratio > 0 and ratio != 1:
+                    p['splits'] = p.get('splits', []) + [ex]
+                    p.update(qty=str(D(p['qty']) * ratio), entry=str(D(p['entry']) / ratio), last=str(D(p['last']) / ratio), high=str(D(p.get('high', p['entry'])) / ratio))
+                    p.pop('suspect', None)
+                    self.alert(f'{sym} split {ratio.normalize()}-for-1 on {ex}: the position is now {D(p["qty"]):.4f} shares at an entry of {D(p["entry"]):.2f} (cost unchanged).')
+                    self.rec('SPLIT', sym, price, None, f'Split {ratio.normalize()}-for-1 on {ex}; quantity, entry and high adjusted.')
+            ref = D(p['last'])
+            if self.quotes is not None and abs(price / ref - 1) > JUMP:  # live checks only: the replay steps a day at a time on split-adjusted closes
+                sus = p.get('suspect')
+                if not sus or sus['day'] == day:
+                    if not sus:
+                        p['suspect'] = dict(day=day, price=str(price), ref=str(ref))
+                        self.alert(f'{sym} quote {price:.2f} is {price / ref - 1:+.0%} from the last price seen ({ref:.2f}) and no split is reported. '
+                                   'Its stop and target are on hold until the next session in case this is a bad quote or an unreported split. Check it.')
+                        self.rec('SUSPECT_PRICE', sym, price, None, f'Price {price:.2f} vs last seen {ref:.2f}; exits held for a session.')
+                    decisions[sym] = f'Holding: quote {price:.2f} is {price / ref - 1:+.0%} from the last price seen {ref:.2f} with no split reported; exits wait a session.'
+                    continue
+            p.pop('suspect', None)  # back in line with the last price, or still there a session later with no split: a real move
+            qty = D(p['qty'])
             p['last'] = str(price)
             high = p['high'] = str(max(D(p.get('high', p['entry'])), price))  # highest price seen since entry, for the trailing stop
             gain = price / D(p['entry']) - 1
