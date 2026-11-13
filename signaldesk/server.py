@@ -47,7 +47,7 @@ def serve(markets, port, account, static=None):
                 if self.headers.get('X-App-Token') != token:
                     return self.send(b'Forbidden', 'text/plain', 403)
                 return self.send(json.dumps(account.snapshot()).encode())
-            if engine and rest == 'export':
+            if engine and rest == 'export' and hasattr(engine, 'conn'):  # the desk has no trade table
                 buf = io.StringIO()
                 writer = csv.writer(buf)
                 with engine.lock:

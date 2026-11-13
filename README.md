@@ -34,9 +34,10 @@ Or double-click `Start Signal Desk.command`.
 ## Action needed (`/`, the home page)
 - `python3 -m signaldesk.desk import FILE.csv` reads a Robinhood "account activity" CSV: Buy/Sell rows become fills, netted into holdings with the broker's average cost.
   Cash is not in that file, so sizes then use the per-position cap alone and the page says so. Holdings, cash and fills live in `data/holdings.json`, apart from every paper portfolio;
-  the page shows the last sync time and flags a sync older than a day, a holding without a price, and an export that does not start at the account opening.
+  the page shows the sync time (when the CSV was downloaded, not imported) and flags a sync older than a day, a holding without a price, and an export that does not start at the account opening.
+  Held symbols are quoted at every agent check from startup. In session, a card on a quote the feed stopped updating fails instead of passing on an old price.
 - Tag a lot: `python3 -m signaldesk.desk tag AAPL swing --entry 100 --stop 90 --target 125` (or `tag AAPL invest`). An investment and a swing trade can share a ticker; swing
-  exits (stop, target) apply only to lots tagged swing. Investments are never sold by a swing rule.
+  exits (stop, target) apply only to lots tagged swing. Investments are never sold by a swing rule. A tag survives re-imports while the holding stays open; selling out and buying again drops it.
 - Each card shows the trigger, the quote and its time, the proposed size, the planned stop and target, the estimated loss at the stop (an estimate: a stop can fill lower),
   and every check it passed or failed: open swing trade on it, new buys today, open positions, sector, price back under the level, the replay gate, the Congress filter, cash, market open.
   The rules are the stock agent's (Edit rules on `/stocks`); the breakout test is the same one the paper agent runs, on the closes it saved. Nothing is placed from the desk.

@@ -10,6 +10,7 @@ data/holdings.json, apart from every paper portfolio. An investment and a swing 
 import argparse
 import csv
 import json
+import os
 import time
 from datetime import date, datetime
 from decimal import InvalidOperation, ROUND_DOWN
@@ -17,10 +18,11 @@ from pathlib import Path
 
 from .core import D, ROOT
 from .quotes import scan
-from .swing import SECTOR
+from .swing import SECTOR, STALE
 
 HOLDINGS = ROOT / 'data' / 'holdings.json'
 SYNC_OLD = 24 * 3600   # a snapshot older than this is flagged: trades since then are unknown here
+QUOTE_OLD = STALE + 120  # in session, a desk card on a quote older than this fails: the agent checks every minute, so it means the feed stopped
 
 def load(path=HOLDINGS):
     try:
@@ -35,12 +37,20 @@ def save(h, path=HOLDINGS):
     tmp.write_text(json.dumps(h, indent=1))
     tmp.replace(path)
 
-def snapshot(account, cash, positions, fills, source, previous=None, notes=()):
-    """The holdings record. A symbol's purpose and swing plan survive a re-import; positions are {symbol, qty, avg_cost}."""
+def snapshot(account, cash, positions, fills, source, previous=None, notes=(), synced_at=None):
+    """The holdings record; positions are {symbol, qty, avg_cost, since}. A symbol's purpose and swing plan survive a re-import only while it is the same
+    holding: if it was sold out and bought again (a new `since`), the old tag and its stop and target are dropped and it starts as an investment.
+    `synced_at` is when the data was exported (the CSV's file time), not when it was imported."""
     tagged = {p['symbol']: p for p in (previous or {}).get('positions', [])}
-    rows = [dict(symbol=p['symbol'], qty=str(p['qty']), avg_cost=None if p.get('avg_cost') is None else str(p['avg_cost']),
-                 purpose=tagged.get(p['symbol'], {}).get('purpose', 'invest'), plan=tagged.get(p['symbol'], {}).get('plan')) for p in positions]
-    return dict(account=account, source=source, synced_at=time.time(), cash=None if cash is None else str(cash), positions=sorted(rows, key=lambda p: p['symbol']), fills=list(fills), notes=list(notes))
+    notes, rows = list(notes), []
+    for p in positions:
+        old, since = tagged.get(p['symbol'], {}), p.get('since')
+        same = not old or not since or not old.get('since') or old['since'] == since
+        if not same and (old.get('purpose') == 'swing' or old.get('plan')):
+            notes.append(f'{p["symbol"]}: sold out and bought again on {since}, so its old swing tag and plan were dropped. Tag it again if this lot is a swing trade.')
+        rows.append(dict(symbol=p['symbol'], qty=str(p['qty']), avg_cost=None if p.get('avg_cost') is None else str(p['avg_cost']), since=since,
+                         purpose=old.get('purpose', 'invest') if same else 'invest', plan=old.get('plan') if same else None))
+    return dict(account=account, source=source, synced_at=synced_at or time.time(), cash=None if cash is None else str(cash), positions=sorted(rows, key=lambda p: p['symbol']), fills=list(fills), notes=notes)
 
 def iso(text):
     for fmt in ('%Y-%m-%d', '%m/%d/%Y'):
@@ -52,7 +62,8 @@ def iso(text):
 
 def read_csv(path):
     """Robinhood account-activity export: Buy and Sell rows are fills; everything else (dividends, transfers) is skipped.
-    Returns (fills oldest first, positions they net to, notes). Average cost follows the broker's way: a sale removes its share of the cost, not the price."""
+    Returns (fills oldest first, positions they net to, notes). Average cost follows the broker's way: a sale removes its share of the cost, not the price.
+    Robinhood lists the newest row first; rows within one day keep the file's order, reversed, so a same-day buy then sell replays in that order."""
     fills = []
     with open(path, newline='', encoding='utf-8-sig') as f:
         for r in csv.DictReader(f):
@@ -66,19 +77,24 @@ def read_csv(path):
             if qty <= 0 or price <= 0:
                 raise ValueError(f'Unreadable row: {r}')
             fills.append(dict(at=iso(r['Activity Date']), symbol=r['Instrument'].strip().upper(), side=code.upper(), qty=str(qty), price=str(price)))
-    fills.sort(key=lambda x: x['at'])
-    net, notes = {}, []
+    if fills and fills[0]['at'] >= fills[-1]['at']:
+        fills.reverse()  # newest first (Robinhood), or a single day: same-day rows are then oldest first too
+    fills.sort(key=lambda x: x['at'])  # stable: an oldest-first file keeps its own same-day order
+    net, notes, flagged = {}, [], set()
     for x in fills:
-        p = net.setdefault(x['symbol'], dict(qty=D(0), cost=D(0)))
+        p = net.setdefault(x['symbol'], dict(qty=D(0), cost=D(0), since=None))
         q, px = D(x['qty']), D(x['price'])
         if x['side'] == 'BUY':
+            if p['qty'] <= 0:
+                p['since'] = x['at']  # a new holding starts: flat (or short of history) before this buy
             p['qty'] += q; p['cost'] += q * px
         else:
-            if q > p['qty'] and x['symbol'] not in ''.join(notes):
+            if q > p['qty'] and x['symbol'] not in flagged:
+                flagged.add(x['symbol'])
                 notes.append(f'{x["symbol"]}: the file sells more than it bought, so it does not start at the account opening; its position and cost are incomplete.')
             p['cost'] -= p['cost'] * min(q / p['qty'], D(1)) if p['qty'] > 0 else D(0)
             p['qty'] -= q
-    positions = [dict(symbol=s, qty=p['qty'], avg_cost=(p['cost'] / p['qty']).quantize(D('.0001'))) for s, p in net.items() if p['qty'] > 0]
+    positions = [dict(symbol=s, qty=p['qty'], avg_cost=(p['cost'] / p['qty']).quantize(D('.0001')), since=p['since']) for s, p in net.items() if p['qty'] > 0]
     return fills, positions, notes
 
 def tag(h, sym, purpose, plan=None):
@@ -123,10 +139,20 @@ def actions(h, e, now=None):
             out['notes'].append(dict(kind='cash', text='Cash is not in the import, so proposed sizes use the per-position cap and are not checked against what you can spend.'))
         out['notes'] += [dict(kind='import', text=t) for t in h.get('notes', [])]
     is_open = bool(market.get('open'))
+    def fresh(at):
+        """A check line for the quote's age: in session a quote the feed stopped updating fails, so no card passes on an old price."""
+        if not is_open:
+            return None
+        age = now - at if at else None
+        if age is None or age > QUOTE_OLD:
+            return dict(ok=False, text='Quote is ' + ('of unknown age' if age is None else f'{age / 60:.0f} min old') + ': the price feed is not updating, so this price is not trusted')
+        return None
+    unpriced = []
     swing = [p for p in positions if p.get('purpose') == 'swing' and p.get('plan')]
     for p in positions:
         q = quotes.get(p['symbol'])
         if not q:
+            unpriced.append(p['symbol'])
             out['notes'].append(dict(kind='unpriced', text=f'No price for {p["symbol"]} yet, so its rule cannot be checked. It is quoted from the stocks agent\'s next check.'))
             continue
         price, at, qty = D(q[0]), q[3] if len(q) > 3 else None, D(p['qty'])
@@ -141,7 +167,8 @@ def actions(h, e, now=None):
             if reason:
                 out['cards'].append(dict(action='SELL', symbol=p['symbol'], trigger=reason, price=str(price), quote_at=at, qty=str(qty), proceeds=str(qty * price), est_pnl=str(qty * (price - entry)),
                                          est_note='At this quote. A stop order can fill below the stop price, so the result is an estimate until the fill.',
-                                         checks=[dict(ok=is_open, text='Market open' if is_open else 'Market closed: place it for the open')], passes=is_open))
+                                         checks=(checks := [c for c in (fresh(at), dict(ok=is_open, text='Market open' if is_open else 'Market closed: place it for the open')) if c]),
+                                         passes=all(c['ok'] for c in checks)))
         out['watching'].append(row)
     today = day or str(date.today())
     cash = None if not h or h.get('cash') is None else D(h['cash'])
@@ -164,23 +191,37 @@ def actions(h, e, now=None):
                 checks.append(dict(ok=False, text=text(why)))
         if cash is not None:
             checks.append(dict(ok=cash >= 1, text=f'Cash ${cash:.2f}' + ('' if cash >= 1 else ': nothing to buy with')))
+        if stale := fresh(at):
+            checks.append(stale)
         checks.append(dict(ok=is_open, text='Market open' if is_open else 'Market closed: the entry waits for the open'))
         budget = r['per_trade'] or (cash if cash and cash >= 1 else D(0))
         if cash is not None and cash >= 1:
             budget = min(budget, cash)  # with no cash the card still shows what the rule would size, and the cash check fails
         qty = (budget / price).quantize(D('.0001'), rounding=ROUND_DOWN) if budget > 0 else D(0)
+        if qty <= 0:
+            checks.append(dict(ok=False, text='Size is 0 shares: set a per-position cap on the US stocks page, or import your cash'))
         stop_px, target_px = price * (1 - r['stop']), price * (1 + r['target'])
         out['cards'].append(dict(action='BUY', symbol=sym, trigger=f'Close {closes[-1]:.2f} broke the 20-day closing high {max(closes[-21:-1]):.2f}. Agent: {decisions.get(sym, "—")}',
                                  price=str(price), quote_at=at, qty=str(qty), cost=str(qty * price), stop=str(stop_px), target=str(target_px), est_loss=str(qty * (price - stop_px)),
                                  est_note=f'Loss if the stop fills at {stop_px:.2f}. A stop can fill lower (a gap, a fast market), so this is an estimate, not a limit.',
                                  checks=checks, passes=all(c['ok'] for c in checks)))
+    out['unpriced'] = unpriced  # left out of the account value until they have a price
     out['cards'].sort(key=lambda c: (c['action'] != 'SELL', not c['passes'], c['symbol']))
     return out
+
+class Held:
+    """The symbols the holdings file lists, read again every time the stocks agent asks, so an import shows up at its next check."""
+    def __init__(self, path):
+        self.path = path
+
+    def __iter__(self):
+        return iter([p['symbol'] for p in (load(self.path) or {}).get('positions', [])])
 
 class Desk:
     """The 'market' behind /desk: no agent of its own. Every request reads the holdings file and the stocks agent's last check."""
     def __init__(self, stocks, path=HOLDINGS):
         self.stocks, self.path, self.running, self.error = stocks, Path(path), False, None
+        stocks.extra = Held(self.path)  # held but not on the watchlist: quoted at every check, never traded
 
     def worker(self):
         pass
@@ -189,9 +230,7 @@ class Desk:
         return False
 
     def snapshot(self):
-        h = load(self.path)
-        self.stocks.extra = [p['symbol'] for p in (h or {}).get('positions', [])]  # held but not on the watchlist: quoted from the next check on
-        return actions(h, self.stocks)
+        return actions(load(self.path), self.stocks)
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -206,7 +245,8 @@ def main(argv=None):
     h = load(a.file)
     if a.cmd == 'import':
         fills, positions, notes = read_csv(a.arg)
-        h = snapshot(a.account, (h or {}).get('cash'), positions, fills, f'csv {Path(a.arg).name}', previous=h, notes=notes)
+        exported = min(os.path.getmtime(a.arg), time.time())  # the download time: an old export imported today is still old
+        h = snapshot(a.account, (h or {}).get('cash'), positions, fills, f'csv {Path(a.arg).name}', previous=h, notes=notes, synced_at=exported)
         save(h, a.file)
         print(f'{len(fills)} fills, {len(positions)} positions -> {a.file}' + ''.join('\n  ' + n for n in notes))
     elif a.cmd == 'tag':

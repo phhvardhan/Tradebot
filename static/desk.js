@@ -27,7 +27,8 @@ async function refresh() {
     const sum = xs => xs.reduce((a, w) => a + Number(w.value), 0), cash = h && h.cash != null ? Number(h.cash) : null;
     $('account').textContent = h ? ` · ${h.account}` : ' · none imported';
     $('value').textContent = h ? usd((cash || 0) + sum(watch)) : '—';
-    $('synced').textContent = h ? `Synced ${ago(h.synced_at)} (${new Date(h.synced_at * 1000).toLocaleString()}) from ${h.source}` : 'Import a brokerage CSV to begin.';
+    const partial = s.unpriced.length ? ` · value leaves out ${s.unpriced.join(', ')} (no price yet)` : '';
+    $('synced').textContent = h ? `Synced ${ago(h.synced_at)} (${new Date(h.synced_at * 1000).toLocaleString()}) from ${h.source}${partial}` : 'Import a brokerage CSV to begin.';
     $('cash').textContent = cash == null ? '—' : usd(cash); $('cash-sub').textContent = cash == null ? 'not in the import' : 'from the import';
     $('invest').textContent = usd(sum(inv)); $('invest-sub').textContent = `${inv.length} holding${inv.length === 1 ? '' : 's'}`;
     $('swing').textContent = usd(sum(sw)); $('swing-sub').textContent = `${sw.length} open`;
@@ -37,7 +38,7 @@ async function refresh() {
     $('cards').replaceChildren(...s.cards.map(card)); $('cards-empty').hidden = s.cards.length > 0;
     $('watch-rows').replaceChildren(...watch.map(w => el('tr', '', el('td', '', el('span', 'sym', UI.avatar(w.symbol), w.symbol)), el('td', '', w.purpose === 'swing' ? 'Swing trade' : 'Investment'),
       el('td', 'num', Number(w.qty).toFixed(4)), el('td', 'num', px(w.price)), el('td', 'num', usd(w.value)), tone(el('td', 'num', w.gain == null ? '—' : pct(Number(w.gain), 1)), w.gain),
-      el('td', 'why', w.plan ? `Stop ${px(w.plan.stop)} (${pct(Number(w.to_stop), 1)} above it) · target ${px(w.plan.target)}` : 'No swing rule: an investment, held to your plan.'))));
+      el('td', 'why', w.plan ? `Stop ${px(w.plan.stop)} (${Math.abs(Number(w.to_stop) * 100).toFixed(1)}% ${Number(w.to_stop) >= 0 ? 'above' : 'under'} it) · target ${px(w.plan.target)}` : 'No swing rule: an investment, held to your plan.'))));
     $('watch-empty').hidden = watch.length > 0; $('watch-rows').closest('.wrap').hidden = !watch.length;
   } catch (e) {
     $('error').hidden = false; $('error').textContent = `Dashboard disconnected (${e.message}). Values shown may be stale.`;
