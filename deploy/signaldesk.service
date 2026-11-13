@@ -1,0 +1,16 @@
+# Signal Desk server on Linux. setup-server.sh fills in __USER__ and __DIR__ and installs this to /etc/systemd/system.
+[Unit]
+Description=Signal Desk (paper agents and decision desk)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=/usr/bin/python3 __DIR__/run.py
+Restart=always
+RestartSec=5
+# The dashboard listens on 127.0.0.1 only; reach it through Tailscale (see README), never a public port.
+
+[Install]
+WantedBy=multi-user.target

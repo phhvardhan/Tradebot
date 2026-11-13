@@ -69,6 +69,19 @@ checks stop, when the data feed has failed for 10 minutes during the session, wh
 Alerts go to `data/alerts.log`, a macOS notification, and a phone push if you set `NTFY_TOPIC` (`python3 -m signaldesk.supervisor install --ntfy-topic <long random string>`; the topic acts as a password).
 Try `python3 -m signaldesk.watchdog --test` to see an alert arrive. Closing the lid or sleeping the Mac still stops everything; the watchdog cannot run then either, so the alert arrives when it wakes.
 
+## Running it on an always-on server (Linux)
+A laptop that sleeps stops the agents and the watchdog. Any small Ubuntu 22.04/24.04 machine runs it (the server uses about 35 MB):
+Google Cloud's e2-micro (free, no time limit, us-west1/us-central1/us-east1), AWS Lightsail (about $5 to $7 a month; new AWS accounts get credits for 6 months),
+or a spare computer at home. Oracle's free tier reclaims mostly idle machines, and this one is mostly idle.
+
+    bash deploy/push.sh you@server --with-data     # on the Mac, once: code, data/ and .env (stop the Mac's agents first: python3 -m signaldesk.supervisor uninstall)
+    bash deploy/setup-server.sh                    # on the server, in ~/signaldesk: python3, pdftotext, systemd services, Tailscale
+    bash deploy/push.sh you@server                 # later code updates: code only, then the service restarts
+
+The dashboard never listens beyond 127.0.0.1. Reach it privately with Tailscale (free for personal use): `sudo tailscale serve --bg 8765` on the server gives an
+https://<machine>.<tailnet>.ts.net address that only your own devices can open; add that name to `SIGNALDESK_HOSTS` in `.env`. Do not open port 8765 to the internet:
+the page shows your holdings to anyone who can reach it. Phone alerts there come from `NTFY_TOPIC` (macOS notifications do not exist on Linux).
+
 ## Forward test
 `CHALLENGER.md` freezes a second paper portfolio (no +25% target, sells under the 20-day closing low near the close) that runs on the same live quotes as the baseline. The Activity page compares them.
 

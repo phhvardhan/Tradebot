@@ -1,0 +1,9 @@
+# One watchdog check; the timer runs it every minute. It reads the heartbeat files, so it alerts even when the server is dead.
+[Unit]
+Description=Signal Desk watchdog check
+
+[Service]
+Type=oneshot
+User=__USER__
+WorkingDirectory=__DIR__
+ExecStart=/usr/bin/python3 -m signaldesk.watchdog
