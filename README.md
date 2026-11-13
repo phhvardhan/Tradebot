@@ -71,7 +71,8 @@ Try `python3 -m signaldesk.watchdog --test` to see an alert arrive. Closing the 
 
 ## Limits you should know
 - A passing replay check means only "it did not lose money in the replay". It is a safety gate, not validation. The dashboard also shows what holding the same stocks would have made, the worst drop, and first-half vs second-half results; read those before trusting a number.
-- The replay decides once a day at the close; the live agent checks every minute. Intraday stop crossings and recoveries can make live results differ.
+- The replay walks each day's bar as open, low and high (low first on up days), then close: a stop or entry level crossed in between fills at the level, a gap fills at the open,
+  as the live agent's minute checks would. The real intraday order is unknown, so live results still differ a little. On closes alone (research scripts) it decides once a day at the close.
 - Every replay is appended to `data/experiments.jsonl` (rules, symbols, period, assumptions, result, code hashes) so numbers can be reproduced and compared.
 - The watchlist was picked with hindsight, so every replay is biased upward. Buy and hold of the same stocks beat every rule setting tested.
 - Stops are checked once a minute on free Yahoo quotes; gaps fill past the stop.

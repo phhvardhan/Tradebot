@@ -67,7 +67,8 @@ class StockEngine(Runner):
         self.backup_error = None
         self.unpriced = {}  # held symbol -> since when it has had no usable price while the market is open; the watchdog alerts on it
         self.extra = []  # symbols quoted but never traded: what the real account holds (desk.py), so their rules can be checked
-        self.near_close = True  # live checks set this from the clock; a replay decides at the close, so it is always true there
+        self.near_close = True  # live checks set this from the clock; a replay sets it on each day's closing price
+        self.prev = None  # replay only: {symbol: the previous price sample today}; a level crossed between two samples fills at the level, as a minute-by-minute check would
         self.running = self.busy = False
         self.error = None
         self.wake = threading.Event()
@@ -179,7 +180,7 @@ class StockEngine(Runner):
         if self.db == ':memory:':
             return
         row = dict(at=datetime.now(timezone.utc).isoformat(), market=self.s.get('source'), symbols=self.symbols, rules={k: str(v) for k, v in self.rules().items()},
-                   assumptions='daily closes, one decision a day, fills at the close plus slippage; watchlist chosen with hindsight', code=CODE, result=result)
+                   assumptions='daily bars walked open, low/high, close (low first on up days); levels crossed between samples fill at the level, gaps at the open; slippage on every fill; watchlist chosen with hindsight', code=CODE, result=result)
         with open(Path(self.db).parent / 'experiments.jsonl', 'a') as f:
             f.write(json.dumps(row, default=str) + '\n')
 
@@ -258,24 +259,24 @@ class StockEngine(Runner):
             if gain >= self.alert_at and not p['alerted']:
                 p['alerted'] = True
                 self.alert(f'{sym} is up {gain:.0%} on your ${D(p["cost"]):.2f} position.')
-            reason = None
+            reason, level = None, price  # level: the price the rule fires at, where a replay fills when the path crossed it between two samples
             if trading and gain <= -self.stop:
-                reason = f'Stop: down {-gain:.1%} (limit −{self.stop:.0%}).'
+                reason, level = f'Stop: down {-gain:.1%} (limit −{self.stop:.0%}).', D(p['entry']) * (1 - self.stop)
             elif trading and self.breakeven and D(high) >= D(p['entry']) * (1 + self.breakeven) and price <= D(p['entry']):
-                reason = f'Break-even stop: reached +{self.breakeven:.0%}, then fell back to the entry price {D(p["entry"]):.2f}.'
+                reason, level = f'Break-even stop: reached +{self.breakeven:.0%}, then fell back to the entry price {D(p["entry"]):.2f}.', D(p['entry'])
             elif trading and self.trail and price <= D(high) * (1 - self.trail):
-                reason = f'Trailing stop: down {1 - price / D(high):.1%} from the high of {D(high):.2f} (limit −{self.trail:.0%}).'
+                reason, level = f'Trailing stop: down {1 - price / D(high):.1%} from the high of {D(high):.2f} (limit −{self.trail:.0%}).', D(high) * (1 - self.trail)
             elif trading and self.exit_low and self.near_close and low is not None and price < low:
                 reason = f'Channel exit: price {price:.2f} fell under the {self.exit_low:.0f}-day closing low {low:.2f}.'
             elif trading and gain >= self.target:
-                reason = f'Target: up {gain:.1%} (target +{self.target:.0%}).'
+                reason, level = f'Target: up {gain:.1%} (target +{self.target:.0%}).', D(p['entry']) * (1 + self.target)
             if not reason:
                 if trading and self.near_close and (day, sym) not in self.snapped:  # one end-of-day record per position
                     self.snapped.add((day, sym)); self.rec('HOLD', sym, price, low, f'End-of-day check: {gain:+.1%} from entry; stop level {D(p["entry"]) * (1 - self.stop):.2f}.')
                 decisions[sym] = f'Holding: {gain:+.1%}.' + ('' if trading else ' Market closed; exits wait for the open.')
                 continue
             self.rec('SELL', sym, price, low, reason)
-            fill = price * (1 - self.slip)
+            fill = (level if self.prev is not None and sym in self.prev else price) * (1 - self.slip)  # the day's first sample (the open) fills where it is: a gap
             pnl = qty * fill - D(p['cost'])
             cash += qty * fill
             realized += pnl
@@ -314,7 +315,11 @@ class StockEngine(Runner):
             elif why := self.price_block(q):
                 decisions[sym] = why
             else:
-                fill = q['price'] * (1 + self.slip)
+                px, before = q['price'], (self.prev or {}).get(sym)
+                if before is not None:  # replay: the path moved into the entry window between two samples, so it entered at the window's edge
+                    lo, top = max(D(str(c)) for _, c in q['closes'][-21:-1]), D(str(q['closes'][-1][1])) * (1 + GAP)
+                    px = lo if before < lo else top if before > top else px
+                fill = px * (1 + self.slip)
                 qty = (min(self.per_trade or cash, cash) / fill).quantize(D('.0001'), rounding=ROUND_DOWN)  # the cap, or whatever cash is left
                 cost = qty * fill
                 if cost < 1:  # only an empty account skips a signal; a position under a dollar is noise
@@ -506,23 +511,39 @@ class StockEngine(Runner):
             out['challenger'] = self.compare()
             return out
 
+def path(row):
+    """The prices one daily bar is walked through: (date, close) is just the close; (date, open, high, low, close) is open, then low and high (the low first
+    on an up day, the high first on a down day), then the close. A minute-by-minute check sees roughly this order; the exact intraday path is unknown."""
+    if len(row) < 5:
+        return [row[-1]]
+    _, o, h, l, c = row
+    return [o, l, h, c] if c >= o else [o, h, l, c]
+
 def replay(hist, congress=None, record=False, **rules):
-    """Run the engine day by day over {SYM: [(date, close)]}; each day decides at that day's close.
-    Unlike the live agent (a check every minute, intraday), it sees one price a day, so intraday stop crossings and recoveries are not reproduced."""
+    """Run the engine day by day over {SYM: [(date, close)]} or {SYM: [(date, open, high, low, close)]}.
+    With full bars each day is walked through its open, low/high and close: entries and exits can fire on any of them, a level crossed between two of them
+    fills at the level (as the live agent's minute checks would), a gap fills at the open, and channel exits are decided on the close.
+    With closes alone it decides once a day at the close, so intraday stop crossings and recoveries are not reproduced."""
     e = StockEngine(':memory:', None, list(hist), congress=congress, **rules)
     e.journal = [] if record else None
-    cols = {k: ([d for d, _ in h], [c for _, c in h]) for k, h in hist.items()}
-    days = sorted({d for h in hist.values() for d, _ in h})
+    cols = {k: ([r[0] for r in h], [r[-1] for r in h], [path(r) for r in h]) for k, h in hist.items()}
+    days = sorted({r[0] for h in hist.values() for r in h})
     at, curve = dict.fromkeys(hist, 0), []
     for day in days:
-        quotes = {}
-        for sym, (ds, cs) in cols.items():
+        today = {}  # sym: (completed closes before today, today's price samples)
+        for sym, (ds, cs, ps) in cols.items():
             i = at[sym]
             if i < len(ds) and ds[i] == day:
                 if i >= 30:
-                    quotes[sym] = dict(closes=list(zip(ds[i - 60 if i > 60 else 0:i], cs[i - 60 if i > 60 else 0:i])), price=D(str(cs[i])), at=0)
+                    today[sym] = (list(zip(ds[i - 60 if i > 60 else 0:i], cs[i - 60 if i > 60 else 0:i])), ps[i])
                 at[sym] = i + 1
-        e.apply(str(day), quotes, True)
+        steps = max((len(ps) for _, ps in today.values()), default=1)
+        e.prev = {}
+        for k in range(steps):
+            e.near_close = k == steps - 1
+            quotes = {sym: dict(closes=closes, price=D(str(ps[k - steps + len(ps)])), at=0) for sym, (closes, ps) in today.items() if k - steps + len(ps) >= 0}
+            e.apply(str(day), quotes, True)
+            e.prev.update({sym: q['price'] for sym, q in quotes.items()})
         curve.append((D(e.s['equity']), D(e.s['cash']), len(e.s['positions'])))
     trades = e.conn.execute('SELECT side, pnl FROM trades').fetchall()
     return dict(entries=sum(t[0] == 'BUY' for t in trades), exits=sum(t[0] == 'SELL' for t in trades),
@@ -534,8 +555,8 @@ def data_hash(hist):
     h = hashlib.sha256()
     for sym in sorted(hist):
         h.update(sym.encode())
-        for d, c in hist[sym]:
-            h.update(f'{d}:{c};'.encode())
+        for row in hist[sym]:
+            h.update((':'.join(map(str, row)) + ';').encode())  # (date, close) hashes as before
     return h.hexdigest()
 
 def save_history(hist, folder):
@@ -544,7 +565,7 @@ def save_history(hist, folder):
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         with gzip.open(path, 'wt') as f:
-            json.dump({s: [[str(d), c] for d, c in h] for s, h in hist.items()}, f)
+            json.dump({s: [[str(r[0]), *r[1:]] for r in h] for s, h in hist.items()}, f)
     return path
 
 def saved_rules(db):
@@ -602,7 +623,7 @@ def evidence(curve, hist, capital):
     peak, dd = capital, D(0)
     for eq, _, _ in curve:
         peak = max(peak, eq); dd = max(dd, (peak - eq) / peak)
-    held = [h[-1][1] / h[0][1] - 1 for h in hist.values() if len(h) > 1 and h[0][1]]
+    held = [h[-1][-1] / h[0][-1] - 1 for h in hist.values() if len(h) > 1 and h[0][-1]]  # close to close
     mid = curve[len(curve) // 2][0]
     return dict(max_drawdown=dd, exposure=sum((eq - cash) / eq for eq, cash, _ in curve) / len(curve), days_open=sum(n > 0 for _, _, n in curve) / len(curve), half1=mid - capital, half2=curve[-1][0] - mid,
                 buy_hold=capital * D(str(sum(held) / len(held))) if held else D(0))
@@ -614,7 +635,7 @@ def build_crypto(db=None, symbols=CRYPTO, capital=D('4000'), slip=D('.0065'), pe
     e = StockEngine(db or ROOT / 'data' / 'crypto.sqlite', coinbase_quotes, symbols, status=crypto_status, source='coinbase',
                     notify=notify_mac, capital=capital, slip=slip, per_trade=per_trade, **dict(DEFAULT_RULES, **rules))
     def edge():
-        h = {s: coinbase_closes(s, 5 * 365) for s in e.symbols}
+        h = {s: coinbase_closes(s, 5 * 365, bars=True) for s in e.symbols}
         save_history(h, ROOT / 'data' / 'history')
         return replay(h, **e.rules())
     e.edge_check = edge
@@ -624,7 +645,7 @@ def build(db=None, symbols=WATCHLIST, **rules):
     (ROOT / 'data').mkdir(exist_ok=True)
     e = StockEngine(db or ROOT / 'data' / 'stocks.sqlite', yahoo_quotes, symbols, notify=notify_mac, congress=congress_data.bought, news=news.note, bench=sp500_since, **dict(DEFAULT_RULES, **rules))
     def edge():
-        h = history(e.symbols)
+        h = history(e.symbols, bars=True)  # full daily bars: the replay walks each day as the live agent sees it
         save_history(h, ROOT / 'data' / 'history')
         return replay(h, congress=congress_data.bought, **e.rules())  # the same entry filter the live agent applies
     e.edge_check = edge

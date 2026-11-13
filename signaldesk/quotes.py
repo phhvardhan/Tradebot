@@ -17,7 +17,17 @@ def coinbase(path, params, product='BTC-USD'):
     with urlopen(req, timeout=10) as res:
         return json.load(res)
 
-def yahoo_quotes(symbols, now, rng='3mo'):
+def daily_bars(series, now):
+    """[(date, open, high, low, close)] for the complete days daily_closes keeps; a day missing its open, high or low stays (date, close)."""
+    keep, out = dict(scan.daily_closes(series, now)), {}
+    n = len(series['t'])
+    for ts, o, h, l in zip(series['t'], series['o'] or [None] * n, series['h'] or [None] * n, series['l'] or [None] * n):
+        d = scan.ts_to_eastern(ts).date()
+        if d in keep and None not in (o, h, l):
+            out[d] = (d, float(o), float(h), float(l), keep[d])
+    return [out.get(d) or (d, c) for d, c in sorted(keep.items())]
+
+def yahoo_quotes(symbols, now, rng='3mo', bars=False):
     """{SYM: closes, live price, quote time, splits} from one Yahoo chart call each, plus per-symbol problems.
     splits: [(ex-date YYYY-MM-DD, new shares per old share)] inside the range, so a held position can be adjusted instead of reading a split as a crash."""
     out, problems = {}, {}
@@ -32,19 +42,20 @@ def yahoo_quotes(symbols, now, rng='3mo'):
             events = ((doc['chart']['result'][0].get('events') or {}).get('splits') or {}).values()
             splits = sorted((str(scan.ts_to_eastern(x['date']).date()), D(str(x['numerator'])) / D(str(x['denominator'])))
                             for x in events if x.get('numerator') and x.get('denominator'))
-            out[sym] = dict(closes=scan.daily_closes(series, now), price=D(str(price)), at=float(at), splits=splits)
+            out[sym] = dict(closes=scan.daily_closes(series, now), price=D(str(price)), at=float(at), splits=splits, **(dict(bars=daily_bars(series, now)) if bars else {}))
         except Exception as exc:
             problems[sym] = f'No quote: {exc}'
         time.sleep(scan.PAUSE)
     return out, problems
 
-def coinbase_closes(sym, days):
-    """Completed UTC daily closes [(date, close)], oldest first. Coinbase returns at most 300 candles per call."""
+def coinbase_closes(sym, days, bars=False):
+    """Completed UTC daily closes [(date, close)], or with bars=True [(date, open, high, low, close)], oldest first. Coinbase returns at most 300 candles per call."""
     end, rows = int(time.time()) // 86400 * 86400, {}
     for start in range(end - days * 86400, end, 300 * 86400):
         for r in coinbase('candles', {'granularity': 86400, 'start': start, 'end': min(start + 299 * 86400, end - 86400)}, sym + '-USD'):
             rows[r[0]] = r
-    return [(datetime.fromtimestamp(t, timezone.utc).date(), float(r[4])) for t, r in sorted(rows.items()) if t < end]
+    day = lambda t: datetime.fromtimestamp(t, timezone.utc).date()  # a candle is [time, low, high, open, close, volume]
+    return [(day(t), float(r[3]), float(r[2]), float(r[1]), float(r[4])) if bars else (day(t), float(r[4])) for t, r in sorted(rows.items()) if t < end]
 
 def coinbase_quotes(symbols, now, days=60):
     out, problems = {}, {}
@@ -88,6 +99,7 @@ def sp500_since(first):
     base = next(((day, c) for day, c in reversed(d['closes']) if day < first), None) if d else None
     return {'since': base[0], 'spy': d['price'] / base[1] - 1} if base else None
 
-def history(symbols, years=5):
-    data, _ = yahoo_quotes(symbols, utcnow(), f'{years}y')
-    return {k: v['closes'] for k, v in data.items()}
+def history(symbols, years=5, bars=False):
+    """{SYM: [(date, close)]}, or with bars=True {SYM: [(date, open, high, low, close)]}: complete days only."""
+    data, _ = yahoo_quotes(symbols, utcnow(), f'{years}y', bars=bars)
+    return {k: v['bars' if bars else 'closes'] for k, v in data.items()}

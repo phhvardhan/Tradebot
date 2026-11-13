@@ -333,6 +333,30 @@ class ReplayTests(unittest.TestCase):
         self.assertGreaterEqual(r['entries'], 1)
         self.assertGreater(r['total'], 0)
 
+
+class BarReplayTests(unittest.TestCase):
+    """The replay walks a daily bar the way minute checks would see it: open, low/high, close."""
+    RULES = dict(capital=D(5000), per_trade=D(500), daily_loss=D(0), stop=D('.1'), target=D('.25'), alert_at=D('.8'))
+    def run_bars(self, *days):
+        base = [(DAY0 + timedelta(i), 100.0, 100.0, 100.0, 100.0) for i in range(39)] + [(DAY0 + timedelta(39), 100.0, 110.0, 100.0, 110.0)]  # breakout close 110
+        bars = base + [(DAY0 + timedelta(40 + i), *d) for i, d in enumerate(days)]
+        return replay({'AAA': bars}, record=True, **self.RULES)['journal']
+    def test_an_intraday_drop_through_the_stop_fills_at_the_stop_not_the_low(self):
+        j = self.run_bars((111, 112, 95, 110))                                     # buys at the open 111, dips to 95 intraday, closes back at 110
+        self.assertEqual([x['side'] for x in j], ['BUY', 'SELL'])
+        self.assertAlmostEqual(float(j[0]['price']), 111 * 1.0005, places=6)
+        self.assertAlmostEqual(float(j[1]['price']), 111 * 1.0005 * 0.9 * 0.9995, places=6)
+    def test_a_gap_under_the_stop_fills_at_the_open(self):
+        j = self.run_bars((111, 112, 110, 111), (90, 91, 85, 88))
+        self.assertAlmostEqual(float(j[1]['price']), 90 * 0.9995, places=6)
+    def test_a_gap_over_the_entry_window_buys_at_the_window_edge_when_the_price_comes_back(self):
+        j = self.run_bars((118, 119, 114, 116))                                    # opens above 110 * 1.05 = 115.5, trades down through it
+        self.assertAlmostEqual(float(j[0]['price']), 115.5 * 1.0005, places=6)
+    def test_closes_only_history_replays_exactly_as_before(self):
+        bars = hist(110, 40) + [(DAY0 + timedelta(40), 112.0), (DAY0 + timedelta(41), 100.0)]
+        r = replay({'AAA': bars}, record=True, **self.RULES)['journal']
+        self.assertEqual([(x['side'], round(float(x['price']), 6)) for x in r], [('BUY', round(112 * 1.0005, 6)), ('SELL', round(100 * 0.9995, 6))])  # both at the close
+
 if __name__ == '__main__':
     unittest.main()
 
