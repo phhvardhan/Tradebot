@@ -36,6 +36,9 @@ Or double-click `Start Signal Desk.command`.
   Cash is not in that file, so sizes then use the per-position cap alone and the page says so. Holdings, cash and fills live in `data/holdings.json`, apart from every paper portfolio;
   the page shows the sync time (when the CSV was downloaded, not imported) and flags a sync older than a day, a holding without a price, and an export that does not start at the account opening.
   Held symbols are quoted at every agent check from startup. In session, a card on a quote the feed stopped updating fails instead of passing on an old price.
+- Or sync from Alpaca instead: put `ALPACA_KEY_ID` and `ALPACA_SECRET_KEY` in `.env` (copy `.env.example`, then `chmod 600 .env`; `ALPACA_LIVE=1` for a live account, else paper).
+  The server then re-reads positions, average cost, cash and fills every 5 minutes, GET requests only; `python3 -m signaldesk.desk sync` does one by hand. It replaces a CSV import.
+  Alpaca keys can trade even though the desk only reads, so keep them out of chats and version control. A failed sync is shown on the page; the last good holdings stay.
 - Tag a lot: `python3 -m signaldesk.desk tag AAPL swing --entry 100 --stop 90 --target 125` (or `tag AAPL invest`). An investment and a swing trade can share a ticker; swing
   exits (stop, target) apply only to lots tagged swing. Investments are never sold by a swing rule. A tag survives re-imports while the holding stays open; selling out and buying again drops it.
 - Each card shows the trigger, the quote and its time, the proposed size, the planned stop and target, the estimated loss at the stop (an estimate: a stop can fill lower),

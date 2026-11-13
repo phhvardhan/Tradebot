@@ -5,22 +5,28 @@ data/holdings.json, apart from every paper portfolio. An investment and a swing 
   python3 -m signaldesk.desk import FILE.csv [--account NAME]       Robinhood "account activity" CSV: Buy/Sell rows become fills, netted into positions (cash is not in the file)
   python3 -m signaldesk.desk tag SYM swing --entry E --stop S --target T [--opened YYYY-MM-DD]
   python3 -m signaldesk.desk tag SYM invest
+  python3 -m signaldesk.desk sync                                     Alpaca, read-only: positions, cash and fills (keys in .env; the server also syncs every 5 minutes)
   python3 -m signaldesk.desk show
 """
 import argparse
 import csv
 import json
 import os
+import re
+import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import InvalidOperation, ROUND_DOWN
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
-from .core import D, ROOT
+from .core import D, ROOT, secret
 from .quotes import scan
 from .swing import SECTOR, STALE
 
 HOLDINGS = ROOT / 'data' / 'holdings.json'
+SYNC_EVERY = 5 * 60    # the server re-reads the broker this often when Alpaca keys are set
 SYNC_OLD = 24 * 3600   # a snapshot older than this is flagged: trades since then are unknown here
 QUOTE_OLD = STALE + 120  # in session, a desk card on a quote older than this fails: the agent checks every minute, so it means the feed stopped
 
@@ -80,6 +86,10 @@ def read_csv(path):
     if fills and fills[0]['at'] >= fills[-1]['at']:
         fills.reverse()  # newest first (Robinhood), or a single day: same-day rows are then oldest first too
     fills.sort(key=lambda x: x['at'])  # stable: an oldest-first file keeps its own same-day order
+    return (fills, *net_fills(fills))
+
+def net_fills(fills):
+    """Fills oldest first -> (positions {symbol, qty, avg_cost, since}, notes). `since` is the first buy after the symbol was last flat."""
     net, notes, flagged = {}, [], set()
     for x in fills:
         p = net.setdefault(x['symbol'], dict(qty=D(0), cost=D(0), since=None))
@@ -95,7 +105,50 @@ def read_csv(path):
             p['cost'] -= p['cost'] * min(q / p['qty'], D(1)) if p['qty'] > 0 else D(0)
             p['qty'] -= q
     positions = [dict(symbol=s, qty=p['qty'], avg_cost=(p['cost'] / p['qty']).quantize(D('.0001')), since=p['since']) for s, p in net.items() if p['qty'] > 0]
-    return fills, positions, notes
+    return positions, notes
+
+ALPACA = {'paper': 'https://paper-api.alpaca.markets', 'live': 'https://api.alpaca.markets'}
+
+def alpaca_get(path, params=None):
+    """One read from Alpaca's trading API. GET only: nothing here can place, change or cancel an order."""
+    key, sec = secret('ALPACA_KEY_ID'), secret('ALPACA_SECRET_KEY')
+    if not key or not sec:
+        raise ValueError('Alpaca keys are not set: put ALPACA_KEY_ID and ALPACA_SECRET_KEY in .env')
+    url = ALPACA['live' if secret('ALPACA_LIVE') == '1' else 'paper'] + path + ('?' + urlencode(params) if params else '')
+    with urlopen(Request(url, headers={'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': sec, 'Accept': 'application/json', 'User-Agent': 'signaldesk'}), timeout=15) as r:
+        return json.load(r)
+
+def read_alpaca(get=alpaca_get):
+    """(account label, cash, positions, fills oldest first, notes) from Alpaca. The broker's positions and average cost are the truth;
+    the fill history only says when each holding started (for tags) and is kept as the record."""
+    acct, held, fills, token = get('/v2/account'), get('/v2/positions'), [], None
+    while True:
+        page = get('/v2/account/activities/FILL', dict(direction='desc', page_size=100, **({'page_token': token} if token else {})))
+        fills += page
+        if len(page) < 100:
+            break
+        token = page[-1]['id']
+    def day(t):  # an ISO time in UTC -> the New York trading date
+        at = datetime.fromisoformat(re.sub(r'\.\d+', '', t).replace('Z', '+00:00')).astimezone(timezone.utc).timestamp()
+        return str(scan.ts_to_eastern(at).date())
+    rows = sorted((dict(at=day(f['transaction_time']), time=f['transaction_time'], symbol=f['symbol'], side='BUY' if f['side'] == 'buy' else 'SELL', qty=str(f['qty']), price=str(f['price']))
+                   for f in fills), key=lambda x: (x['at'], x['time']))
+    since = {p['symbol']: p['since'] for p in net_fills(rows)[0]}
+    positions, notes = [], []
+    for p in held:
+        if p.get('asset_class', 'us_equity') != 'us_equity' or p.get('side', 'long') != 'long':
+            notes.append(f'{p["symbol"]}: a {p.get("side", "")} {p.get("asset_class", "")} position is not shown; the desk covers long US stocks.'.replace('  ', ' '))
+            continue
+        positions.append(dict(symbol=p['symbol'], qty=D(str(p['qty'])), avg_cost=D(str(p['avg_entry_price'])).quantize(D('.0001')), since=since.get(p['symbol'])))
+    mode = 'live' if secret('ALPACA_LIVE') == '1' else 'paper'
+    return f'Alpaca {mode} ••••{str(acct.get("account_number", ""))[-4:]}', D(str(acct['cash'])), positions, rows, notes
+
+def sync_alpaca(path=HOLDINGS, get=alpaca_get):
+    """Replace the holdings with Alpaca's, keeping each holding's tag while it stays open. Returns the new record."""
+    label, cash, positions, fills, notes = read_alpaca(get)
+    h = snapshot(label, cash, positions, fills, 'alpaca (read-only API)', previous=load(path), notes=notes)
+    save(h, path)
+    return h
 
 def tag(h, sym, purpose, plan=None):
     """Mark one holding an investment or a swing trade with its own exit plan (entry, stop, target, opened). Returns an error text or None."""
@@ -219,22 +272,39 @@ class Held:
 
 class Desk:
     """The 'market' behind /desk: no agent of its own. Every request reads the holdings file and the stocks agent's last check."""
-    def __init__(self, stocks, path=HOLDINGS):
-        self.stocks, self.path, self.running, self.error = stocks, Path(path), False, None
+    def __init__(self, stocks, path=HOLDINGS, get=alpaca_get):
+        self.stocks, self.path, self.running, self.error, self.get = stocks, Path(path), False, None, get
+        self.lock, self.wake = threading.Lock(), threading.Event()
         stocks.extra = Held(self.path)  # held but not on the watchlist: quoted at every check, never traded
 
+    def sync(self):
+        """One broker read when Alpaca keys are set; a failure is kept for the page and retried at the next interval."""
+        if not secret('ALPACA_KEY_ID'):
+            return
+        try:
+            sync_alpaca(self.path, self.get)
+            self.error = None
+        except Exception as exc:
+            self.error = f'Alpaca sync failed: {type(exc).__name__}: {exc}. Holdings below are from the last good sync.'
+
     def worker(self):
-        pass
+        while True:
+            self.sync()
+            self.wake.wait(SYNC_EVERY)
+            self.wake.clear()
 
     def control(self, path):
         return False
 
     def snapshot(self):
-        return actions(load(self.path), self.stocks)
+        out = actions(load(self.path), self.stocks)
+        if self.error:
+            out['notes'].insert(0, dict(kind='sync', text=self.error))
+        return out
 
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument('cmd', choices=['import', 'tag', 'show'])
+    p.add_argument('cmd', choices=['import', 'sync', 'tag', 'show'])
     p.add_argument('arg', nargs='?', help='CSV path for import, symbol for tag')
     p.add_argument('purpose', nargs='?', choices=['swing', 'invest'])
     p.add_argument('--account', default='Brokerage (CSV)'); p.add_argument('--file', default=str(HOLDINGS))
@@ -249,6 +319,9 @@ def main(argv=None):
         h = snapshot(a.account, (h or {}).get('cash'), positions, fills, f'csv {Path(a.arg).name}', previous=h, notes=notes, synced_at=exported)
         save(h, a.file)
         print(f'{len(fills)} fills, {len(positions)} positions -> {a.file}' + ''.join('\n  ' + n for n in notes))
+    elif a.cmd == 'sync':
+        h = sync_alpaca(a.file)
+        print(f'{h["account"]}: {len(h["positions"])} positions, cash ${D(h["cash"]):.2f}, {len(h["fills"])} fills -> {a.file}' + ''.join('\n  ' + n for n in h['notes']))
     elif a.cmd == 'tag':
         if not h:
             return print('Import holdings first.') or 1

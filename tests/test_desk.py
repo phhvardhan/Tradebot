@@ -3,6 +3,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from decimal import Decimal as D
 from pathlib import Path
 
@@ -163,6 +164,81 @@ class ActionTests(unittest.TestCase):
     def test_holdings_without_a_price_are_listed_so_the_account_value_can_say_it_is_partial(self):
         out = desk.actions(self.holdings(), engine(prices={'AAPL': (100, closes(100))}))
         self.assertEqual(out['unpriced'], ['XOM'])
+
+def fake_alpaca(fill_pages, positions=None, cash='1234.5'):
+    """A stand-in for Alpaca's GET endpoints; records what was asked."""
+    calls = []
+    def get(path, params=None):
+        calls.append((path, dict(params or {})))
+        if path == '/v2/account':
+            return dict(account_number='PA3XYZ9876', cash=cash)
+        if path == '/v2/positions':
+            return positions if positions is not None else [dict(symbol='AAPL', qty='3', avg_entry_price='101.23456', side='long', asset_class='us_equity'),
+                                                            dict(symbol='BTCUSD', qty='0.1', avg_entry_price='60000', side='long', asset_class='crypto')]
+        return fill_pages[sum(c[0].endswith('FILL') for c in calls) - 1]                                   # pages in the order asked
+    return get, calls
+
+def fill(i, t, side, qty, price, sym='AAPL'):
+    return dict(id=f'2026::{i}', activity_type='FILL', transaction_time=t, symbol=sym, side=side, qty=qty, price=price, type='fill')
+
+class AlpacaTests(unittest.TestCase):
+    def test_broker_positions_and_cash_are_the_truth_and_fills_say_when_each_holding_started(self):
+        page = [fill(3, '2026-11-10T15:00:00.123456789Z', 'buy', '3', '101'), fill(2, '2026-10-02T15:00:00Z', 'sell', '2', '120'), fill(1, '2026-10-01T15:00:00Z', 'buy', '2', '100')]
+        get, calls = fake_alpaca([page])
+        label, cash, positions, fills, notes = desk.read_alpaca(get)
+        self.assertTrue(label.endswith('9876')); self.assertEqual(cash, D('1234.5'))
+        self.assertEqual([(p['symbol'], p['qty'], p['avg_cost'], p['since']) for p in positions], [('AAPL', D('3'), D('101.2346'), '2026-11-10')])  # flat on 10-02, bought again 11-10
+        self.assertEqual([f['side'] for f in fills], ['BUY', 'SELL', 'BUY'])                                  # oldest first
+        self.assertIn('BTCUSD', notes[0])
+        self.assertEqual({c[0] for c in calls}, {'/v2/account', '/v2/positions', '/v2/account/activities/FILL'})
+
+    def test_fill_history_is_read_page_by_page(self):
+        first = [fill(200 - i, f'2026-11-{10 - i % 9:02d}T15:00:00Z', 'buy', '1', '100') for i in range(100)]
+        get, calls = fake_alpaca([first, [fill(0, '2026-01-02T15:00:00Z', 'buy', '1', '90')]])
+        _, _, _, fills, _ = desk.read_alpaca(get)
+        self.assertEqual(len(fills), 101)
+        self.assertEqual(calls[-1][1]['page_token'], first[-1]['id'])
+
+    def test_a_sync_keeps_tags_on_holdings_that_stay_open(self):
+        page = [fill(1, '2026-10-01T15:00:00Z', 'buy', '3', '100')]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'h.json'
+            desk.sync_alpaca(path, fake_alpaca([page])[0])
+            h = desk.load(path); desk.tag(h, 'AAPL', 'swing', dict(entry='100', stop='90', target='125')); desk.save(h, path)
+            h = desk.sync_alpaca(path, fake_alpaca([page])[0])
+        self.assertEqual((h['positions'][0]['purpose'], h['positions'][0]['plan']['stop'], h['source']), ('swing', '90', 'alpaca (read-only API)'))
+
+    def test_the_desk_syncs_only_with_keys_and_shows_a_failure_instead_of_hiding_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = []
+            d = desk.Desk(engine(), Path(tmp) / 'h.json', get=lambda *a, **k: calls.append(a) or (_ for _ in ()).throw(OSError('network down')))
+            with patch.object(desk, 'secret', lambda name: None):
+                d.sync()
+            self.assertEqual(calls, [])                                                                       # no keys: no request at all
+            with patch.object(desk, 'secret', lambda name: 'k'):
+                d.sync()
+            self.assertIn('network down', d.snapshot()['notes'][0]['text'])
+
+    def test_the_api_client_only_ever_sends_get_requests(self):
+        sent = []
+        class Res:
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+            def read(self, *a): return b'{}'
+        with patch.object(desk, 'secret', lambda name: {'ALPACA_KEY_ID': 'k', 'ALPACA_SECRET_KEY': 's'}.get(name)), \
+             patch.object(desk, 'urlopen', lambda req, timeout: sent.append(req) or Res()):
+            desk.alpaca_get('/v2/account')
+        self.assertEqual((sent[0].get_method(), sent[0].full_url), ('GET', 'https://paper-api.alpaca.markets/v2/account'))
+        self.assertIsNone(sent[0].data)
+
+class HostTests(unittest.TestCase):
+    def test_only_loopback_and_listed_private_names_are_answered(self):
+        from signaldesk.core import host_ok
+        with patch.dict(os.environ, {'SIGNALDESK_HOSTS': ''}):
+            self.assertTrue(host_ok('127.0.0.1:8765', 8765)); self.assertFalse(host_ok('desk.tail1.ts.net', 8765))
+        with patch.dict(os.environ, {'SIGNALDESK_HOSTS': 'desk.tail1.ts.net'}):
+            self.assertTrue(host_ok('desk.tail1.ts.net', 8765)); self.assertTrue(host_ok('desk.tail1.ts.net:8765', 8765))
+            self.assertFalse(host_ok('evil.example:8765', 8765)); self.assertFalse(host_ok(None, 8765))
 
 class ServedTests(Case):
     def test_the_desk_is_served_and_asks_the_agent_to_quote_what_the_account_holds(self):

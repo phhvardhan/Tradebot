@@ -1,13 +1,12 @@
 """Alerts that do not depend on the dashboard: a line in data/alerts.log, a macOS notification, and (only if you set NTFY_TOPIC) a phone push through ntfy.sh.
 The ntfy topic works like a password: anyone who knows it can read your alerts. Pick a long random one, e.g. `python3 -c "import secrets;print(secrets.token_urlsafe(16))"`."""
 import json
-import os
 import subprocess
 import time
 import urllib.request
 from pathlib import Path
 
-from .core import ROOT
+from .core import ROOT, secret
 
 LOG = ROOT / 'data' / 'alerts.log'
 
@@ -28,10 +27,10 @@ def send(title, text, urgent=False, log=None):
         results['mac'] = 'sent'
     except Exception as exc:
         results['mac'] = f'failed: {exc}'
-    topic = os.environ.get('NTFY_TOPIC')
+    topic = secret('NTFY_TOPIC')  # environment, else .env
     if topic:
         try:
-            req = urllib.request.Request(f'{os.environ.get("NTFY_SERVER", "https://ntfy.sh")}/{topic}', data=text.encode(), method='POST',
+            req = urllib.request.Request(f'{secret("NTFY_SERVER") or "https://ntfy.sh"}/{topic}', data=text.encode(), method='POST',
                                          headers={'Title': title.encode('ascii', 'ignore').decode(), 'Priority': 'urgent' if urgent else 'default', 'Tags': 'warning' if urgent else 'white_check_mark'})
             urllib.request.urlopen(req, timeout=8).read()
             results['ntfy'] = 'sent'

@@ -20,6 +20,19 @@ def skill(folder, name):
     spec.loader.exec_module(mod)
     return mod
 
+def secret(name):
+    """A setting such as an API key: the environment variable, else a NAME=value line in the project's .env (git-ignored; keep it chmod 600)."""
+    if name in os.environ:  # set, even to empty, wins over the file
+        return os.environ[name] or None
+    try:
+        for line in (ROOT / '.env').read_text().splitlines():
+            k, sep, v = line.partition('=')
+            if sep and k.strip() == name:
+                return v.strip().strip('"\'') or None
+    except OSError:
+        pass
+    return None
+
 def positive(value):
     try:
         x = D(str(value))
@@ -36,8 +49,10 @@ def stamp(value):
     return x / 1000 if x > 100_000_000_000 else x
 
 def host_ok(host, port):
-    # Exact Host match blocks DNS rebinding; both loopback spellings are fine.
-    return host in (f'127.0.0.1:{port}', f'localhost:{port}')
+    # Exact Host match blocks DNS rebinding; both loopback spellings are fine, plus names you list in SIGNALDESK_HOSTS
+    # (a private-network name such as a Tailscale machine, reached through a proxy to the loopback port: the server itself never listens beyond 127.0.0.1).
+    extra = [h.strip() for h in (secret('SIGNALDESK_HOSTS') or '').split(',') if h.strip()]
+    return host in (f'127.0.0.1:{port}', f'localhost:{port}', *extra, *(f'{h}:{port}' for h in extra))
 
 BACKUPS = 14
 
