@@ -1,0 +1,108 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk · US stocks</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><div class="main">
+<header class="top"><div class="top-title"><h1 id="title">US stocks</h1><p><span id="mode">Connecting…</span></p></div>
+<nav class="pages" id="pages" aria-label="Pages"><span class="goo" aria-hidden="true"><i class="pill"></i></span>
+<a href="" data-p="overview"><svg class="i"><use href="#n-home"/></svg><span>Overview</span></a>
+<a href="" data-p="watchlist"><svg class="i"><use href="#n-list"/></svg><span>Watchlist</span></a>
+<a href="" data-p="activity"><svg class="i"><use href="#n-cal"/></svg><span>Activity</span></a>
+<a href="" data-p="congress" id="nav-congress"><svg class="i"><use href="#n-bank"/></svg><span>Congress</span></a></nav>
+<div class="controls"><span id="status">Paused</span><button class="primary" id="start" disabled>Start</button><button id="pause" disabled title="Stops further checks, including exits. A check already in progress may finish.">Pause</button><button id="step" disabled>Run once</button></div></header>
+<main class="content">
+<div class="tape" id="tape" aria-hidden="true"><div class="tape-track"></div></div>
+<div id="error" class="banner" role="alert" hidden></div><div id="alerts" class="banner" role="status" hidden></div>
+
+<section class="card hero" data-page="overview" aria-label="Portfolio">
+<div class="hero-head"><div><p class="label">Portfolio value<span id="source" class="dim" style="text-transform:none;letter-spacing:0;font-weight:400"></span></p><span id="equity" class="val num">—</span><p id="return" class="hero-read num">—</p></div>
+<div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px"><div class="seg" role="group" aria-label="Range"><button type="button" data-r="1d">1D</button><button type="button" data-r="1w">1W</button><button type="button" data-r="all" aria-pressed="true">All</button></div><p id="hero-read" class="dim sub num"></p><p id="asof" class="dim sub"></p></div></div>
+<div id="hero-box" class="hero-box"><svg id="hero" role="img" aria-label="Account value chart"></svg><div id="hero-tip" class="hero-tip num" hidden></div></div>
+<div class="kpis">
+<div class="kpi"><span class="label">Today<svg class="i" id="today-icon"><use href="#i-up"/></svg></span><span id="today" class="val num">—</span><span id="limit" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Total gain<svg class="i"><use href="#i-activity"/></svg></span><span id="gain" class="val num">—</span><span id="gain-pct" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Positions<svg class="i"><use href="#i-bars"/></svg></span><span id="active" class="val num">—</span><span id="invested" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Cash<svg class="i"><use href="#i-wallet"/></svg></span><span id="cash" class="val num">—</span><span id="realized" class="sub num">—</span></div>
+</div></section>
+
+<section class="cols" data-page="overview">
+<div class="stack">
+<div class="card"><div class="holdings-head"><h2 class="card-title">Holdings<span class="sub">tap a row for its chart</span></h2><svg id="ring" viewBox="0 0 96 96" role="img" aria-label="Share of the account invested"></svg></div>
+<div id="holdings" class="holdings"></div><p id="noPos" class="dim">No open positions. A buy happens when a watchlist symbol closes above its 20-day high.</p></div>
+</div>
+<aside class="stack rail">
+<div class="card"><h2 class="card-title">Agent</h2><p id="decision" aria-live="polite">Waiting for data.</p><p id="connection" class="dim"></p>
+<p class="label">5-year replay check</p><p id="edge" class="dim">Runs at the first in-session check of each trading day.</p></div>
+<div class="card"><div class="rules-head"><h2>Rules</h2><button id="edit-rules" type="button" disabled>Edit</button></div>
+<dl><dt>Enter when</dt><dd>close &gt; 20-day high, price still above it</dd><dt>Per position</dt><dd id="r-per">—</dd><dt>Stop</dt><dd id="r-stop">—</dd><dt>Target</dt><dd id="r-target">—</dd><dt>Trailing stop</dt><dd id="r-trail">—</dd><dt>Channel exit</dt><dd id="r-exitlow">—</dd><dt>Break-even</dt><dd id="r-be">—</dd><dt>Max per sector</dt><dd id="r-sector">—</dd><dt>Max open positions</dt><dd id="r-maxopen">—</dd><dt>New buys per day</dt><dd id="r-maxnew">—</dd><dt>Alert at</dt><dd id="r-alert">—</dd><dt>Daily loss limit</dt><dd id="r-loss">—</dd><dt id="r-congress-label">Congress filter</dt><dd id="r-congress">—</dd><dt id="r-slip-label">Slippage</dt><dd id="r-slip">—</dd><dt>Trades</dt><dd id="r-trades">regular session only</dd></dl></div>
+</aside>
+</section>
+
+<section class="card" data-page="watchlist"><h2 class="card-title">Watchlist<span class="sub">price vs last daily close · decision on the last check</span></h2>
+<ul id="watch" class="tickers"></ul>
+<dl class="legend"><dt>Faded</dt><dd>broke out, but the live price fell back under the breakout level</dd><dt>No cash</dt><dd>valid signal, but no free cash at all (less than a dollar)</dd><dt>Blocked</dt><dd>a safety rule stopped it; the reason is on the row</dd><dt>Held / Sold</dt><dd>you own it / an exit rule closed it</dd></dl></section>
+
+<section class="stack cg" data-page="congress">
+<div class="card"><h2 class="card-title">What is this page?</h2>
+<p class="cg-what">Members of the US House must publicly report their stock trades, but they have up to 45 days to do it, so everything below happened days to weeks ago. This page lists the trades <strong>filed in the last 60 days</strong> in the stocks on your watchlist, and checks them against what you hold. It is a reading list, not a signal.</p>
+<p id="cg-rule" class="cg-rule"></p><p id="cg-status" class="dim sub"></p></div>
+<div class="cg-grid"><div class="card"><h2 class="card-title">The last 60 days at a glance</h2>
+<div class="cg-tiles"><div><span class="label">Bought</span><strong id="cg-buys" class="num up cg-n">—</strong></div><div><span class="label">Sold</span><strong id="cg-sells" class="num down cg-n">—</strong></div><div><span class="label">Stocks you hold</span><strong id="cg-held-n" class="num cg-n">—</strong></div></div>
+<div class="cg-bar" aria-hidden="true"><i id="cg-bar-buy"></i></div><p id="cg-bar-note" class="dim sub"></p>
+<p class="label" style="margin-top:18px">Most active stocks · click to filter</p><div id="cg-top" class="chips"></div></div>
+<div class="card"><h2 class="card-title">What it means for your positions</h2><ul id="cg-held" class="cg-list"></ul><p id="cg-held-none" class="dim sub"></p></div></div>
+<div class="card" id="congress"><div class="pmap-head"><h2>Filings</h2><span id="cg-count" class="dim sub"></span><span class="grow"></span>
+<div class="seg" id="cg-filter" role="group" aria-label="Filter filings"><button type="button" data-f="all" aria-pressed="true">All</button><button type="button" data-f="buy">Bought</button><button type="button" data-f="sell">Sold</button><button type="button" data-f="held">You hold</button></div></div>
+<button id="cg-clear" class="link" type="button" hidden></button>
+<div class="wrap"><table class="grid"><thead><tr><th>Filed</th><th>Stock</th><th>Member</th><th>Action</th><th title="Members report a range, not an exact amount">Amount (range)</th><th title="Days between the trade and the filing. The legal limit is 45.">Reported after</th></tr></thead><tbody id="q-rows"></tbody></table></div>
+<p id="q-empty" class="dim" hidden></p><button id="cg-more" type="button" hidden></button>
+<p class="dim sub" id="q-note" style="margin-top:14px">Amounts are ranges, not exact figures. “Reported after” in red means later than the 45-day legal limit. Trades by a spouse or child are tagged.</p></div>
+</section>
+
+<div data-page="activity" class="stack">
+<section class="card" id="chal" hidden><div class="pmap-head"><h2>Challenger test</h2><span id="ch-sub" class="dim sub"></span></div>
+<p id="ch-protocol" class="cg-what"></p><p id="ch-warn" class="cg-rule" hidden></p>
+<div class="wrap"><table class="grid"><thead><tr><th>Since the start</th><th>Baseline</th><th>Challenger: 20-day-low exit</th></tr></thead><tbody id="ch-rows"></tbody></table></div>
+<p class="label" style="margin-top:18px">Challenger holdings · sells if the price in the last 10 minutes is under the channel low</p><div id="ch-pos" class="chips"></div>
+<p id="ch-note" class="dim sub" style="margin-top:14px"></p></section>
+<section class="card" id="bench"><h2>Account vs S&amp;P 500</h2>
+<div class="bench-row"><div><span class="label">Your account</span><strong id="b-acct" class="num">—</strong></div><div><span class="label">S&amp;P 500 (SPY)</span><strong id="b-spy" class="num">—</strong></div><div><span class="label">Difference</span><strong id="b-diff" class="num">—</strong></div></div>
+<p class="dim sub" id="b-note"></p></section>
+<section class="card" id="replay"><div class="pmap-head"><h2>Replay</h2><span id="rp-note" class="dim sub"></span><span class="grow"></span><button id="rp-play" type="button" disabled>Play</button></div>
+<div class="rp-stats"><div><span class="label">Day</span><strong id="rp-date" class="num">—</strong></div><div><span class="label">Account value</span><strong id="rp-eq" class="num rp-val">—</strong></div><div><span class="label">Day P&amp;L</span><strong id="rp-pnl" class="num rp-val">—</strong></div><div class="rp-held"><span class="label">Open that day</span><div id="rp-pos" class="chips"></div></div></div>
+<div id="rp-box" class="chart-box"><svg id="rp-chart" role="img" aria-label="Account value by trading day"></svg></div>
+<input id="rp-range" type="range" min="0" max="0" value="0" aria-label="Replay day"></section>
+<section class="card" id="pmap"><div class="pmap-head"><h2>Daily P&amp;L</h2><span id="pmap-sum" class="num sub"></span><span class="grow"></span>
+<span class="pmap-legend dim" aria-hidden="true">Loss <i class="pcell" data-tone="down" data-level="4"></i><i class="pcell" data-tone="down" data-level="2"></i><i class="pcell"></i><i class="pcell" data-tone="up" data-level="2"></i><i class="pcell" data-tone="up" data-level="4"></i> Profit</span></div>
+<div class="pmap-scroll"><div id="pmap-grid" role="group" aria-label="Profit and loss by day, one block per year. Arrow keys move between days."></div></div>
+<p class="dim sub" id="pmap-note">Change in account value each trading day, open positions included. Shade shows size against your biggest day. Blank days are before the first trade or not yet recorded.</p>
+<div id="pmap-tip" class="ptip" aria-hidden="true"></div></section>
+<section class="card" id="rulelog"><h2 class="card-title">Rule changes</h2><ul id="rl-list" class="dim sub"></ul><p id="rl-empty" class="dim sub">No rule has been changed since this log started.</p></section>
+<section class="card journal"><div class="head"><h2>Journal</h2><span id="count" class="dim"></span><span class="grow"></span><a href="/api/stocks/export" id="export" download="stock-trades.csv" class="link">Export CSV</a></div>
+<div class="wrap"><table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>P&amp;L</th><th>Reason</th></tr></thead><tbody id="trades"></tbody></table><p id="empty" class="dim">No trades yet.</p></div></section></div>
+
+<footer id="foot">Paper trading only: no broker, no live orders. Prices are free Yahoo quotes and can lag; fills are simulated at the quote plus slippage. Stops and targets are checked once a minute during the regular session, so a gap can fill well past your stop. Not investment advice.</footer>
+</main></div></div>
+<div id="toasts" aria-live="polite"></div>
+<dialog id="detail" aria-labelledby="d-sym"><button class="icon-btn close" id="d-close" aria-label="Close"><svg class="i"><use href="#i-x"/></svg></button>
+<div class="d-head"><span class="logo" id="d-logo"></span><div><h2 id="d-sym"></h2><p id="d-name" class="dim"></p></div></div>
+<p class="d-price"><span id="d-price" class="num"></span><span id="d-change" class="num"></span></p>
+<div id="d-box" class="chart-box"><svg id="d-chart" role="img" aria-label="Price over the last 30 days with entry, stop and target"></svg><div id="d-tip" class="hero-tip num" hidden></div></div>
+<dl id="d-list" class="d-list"></dl></dialog>
+<dialog id="rules" aria-labelledby="rules-title"><form id="rules-form" method="dialog" class="rules-form">
+<h2 id="rules-title">Edit rules</h2>
+<label class="wide">Watchlist<textarea id="f-symbols" rows="3" spellcheck="false" autocapitalize="characters"></textarea><small>Symbols separated by spaces or commas, up to 40.</small></label>
+<label>Per position ($)<input id="f-per_trade" type="number" min="0" step="any" inputmode="decimal"><small>0 = no limit: uses all available cash. With less cash than this, it buys what is left.</small></label>
+<label>Daily loss limit ($)<input id="f-daily_loss" type="number" min="0" step="any" inputmode="decimal"><small>0 = off.</small></label>
+<label>Stop (%)<input id="f-stop" type="number" min="0.1" max="99.9" step="any" inputmode="decimal" required><small>Sell when down this much.</small></label>
+<label>Target (%)<input id="f-target" type="number" min="0.1" step="any" inputmode="decimal" required><small>Sell when up this much.</small></label>
+<label>Trailing stop (%)<input id="f-trail" type="number" min="0" max="99.9" step="any" inputmode="decimal"><small>Sell when down this much from its highest price since you bought. 0 = off.</small></label>
+<label>Break-even trigger (%)<input id="f-breakeven" type="number" min="0" max="99.9" step="any" inputmode="decimal"><small>Once up this much, sell if it falls back to your entry price (no loss). 0 = off.</small></label>
+<label>Max per sector<input id="f-max_sector" type="number" min="0" max="40" step="1" inputmode="numeric"><small>No new buy in a sector already holding this many (tech, finance, health, staples, energy). 0 = no limit.</small></label>
+<label>Alert at (%)<input id="f-alert_at" type="number" min="0.1" step="any" inputmode="decimal" required></label>
+<label id="f-congress-box">Congress filter (days)<input id="f-congress_days" type="number" min="0" max="365" step="1" inputmode="numeric"><small>Buy a breakout only if a House member filed a purchase of that stock in this many days. 0 = off.</small></label>
+<label>Max open positions<input id="f-max_open" type="number" min="0" max="40" step="1" inputmode="numeric"><small>No new buys while this many are held. 0 = no limit.</small></label>
+<label>Channel exit (days)<input id="f-exit_low" type="number" min="0" max="250" step="1" inputmode="numeric"><small>Sell when the price falls under the lowest close of the last N days. 0 = off. Use with a very high target to let winners run.</small></label>
+<label>New buys per day<input id="f-max_new" type="number" min="0" max="40" step="1" inputmode="numeric"><small>Spreads entries over several days instead of buying a whole rally at once. 0 = no limit.</small></label>
+<label class="check"><input id="f-gate" type="checkbox">Block entries when the 5-year replay loses</label>
+<p class="wide dim">Capital and fees are fixed. Changes apply from the next check; open positions use the new stop and target.</p>
+<p id="rules-error" class="wide" role="alert" hidden></p>
+<div class="wide actions"><button type="button" id="rules-cancel">Cancel</button><button class="primary" id="rules-save" type="submit" value="save">Save</button></div>
+</form></dialog>
+<script src="/ui.js"></script><script src="/stocks.js"></script></body></html>

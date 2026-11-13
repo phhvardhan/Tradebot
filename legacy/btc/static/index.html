@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk</title><link rel="stylesheet" href="/style.css"></head><body><main>
+<header class="bar"><div class="brand"><strong>Signal Desk</strong><span class="dim">BTC/USD · 5-min trend</span><span id="source">—</span></div>
+<div class="controls"><span id="status">Paused</span><button class="primary" id="start" disabled>Start</button><button id="pause" disabled title="Stops further checks, including exits. A check already in progress may finish.">Pause</button><button id="step" disabled>Run once</button></div></header>
+<p id="mode" class="dim"></p><div id="error" role="alert" hidden></div>
+<section class="stats" aria-label="Account">
+<div class="stat equity"><span class="label">Equity</span><span id="equity" class="val num">—</span><span id="return" class="sub num">—</span><svg id="spark" viewBox="0 0 300 42" preserveAspectRatio="none" aria-hidden="true"></svg></div>
+<div class="stat"><span class="label">Cash</span><span id="cash" class="val num">—</span><span class="sub dim">paper USD</span></div>
+<div class="stat"><span class="label">Realized P&amp;L</span><span id="realized" class="val num">—</span><span id="fees" class="sub dim num">—</span></div>
+<div class="stat"><span class="label">Position</span><span id="position" class="val num">—</span><span id="qty" class="sub dim num">—</span></div>
+</section>
+<section class="market">
+<div class="card"><div class="head"><h2>BTC/USD</h2><span id="price" class="num">—</span><span class="grow"></span><span class="legend"><span><i style="background:var(--fg)"></i>close</span><span><i style="background:var(--ma5)"></i>MA 5</span><span><i style="background:var(--ma20)"></i>MA 20</span></span></div>
+<svg id="chart" viewBox="0 0 720 260" role="img" aria-label="BTC/USD closes with 5 and 20 candle moving averages"></svg><div id="averages" class="dim num"></div></div>
+<aside class="card"><h2>Last decision</h2><p id="decision" aria-live="polite">Waiting for data.</p><p id="connection" class="dim"></p>
+<h2>Rules</h2><dl><dt>Enter when</dt><dd>MA5 &gt; MA20</dd><dt>Size</dt><dd>≤ 20% equity</dd><dt>Stop / target</dt><dd>−2% / +4%</dd><dt>Exit on</dt><dd>MA5 &lt; MA20</dd><dt>No entries below</dt><dd>−5% equity</dd><dt>Max spread</dt><dd>0.5%</dd><dt>Live entry gate</dt><dd>7-day replay profitable</dd><dt>Fee per side</dt><dd id="fee">—</dd><dt>Slippage</dt><dd id="slip">—</dd></dl></aside>
+</section>
+<section class="journal card"><div class="head"><h2>Journal</h2><span id="count" class="dim"></span><span class="grow"></span><a href="/api/crypto/export" download="paper-trades.csv" class="link">Export CSV</a></div>
+<div class="wrap"><table><thead><tr><th>Time</th><th>Side</th><th>Qty BTC</th><th>Price</th><th>Fee</th><th>P&amp;L</th><th>Reason</th></tr></thead><tbody id="trades"></tbody></table><p id="empty" class="dim">No trades yet. Start the agent or run one check.</p></div></section>
+<section class="account card" aria-label="Real WazirX account"><div class="head"><h2>Real account · read-only</h2><span class="grow"></span><button id="account-refresh" disabled>Refresh balances</button></div>
+<p id="account-status" class="dim" aria-live="polite">Account viewer not enabled.</p>
+<div class="wrap"><table><thead><tr><th>Asset</th><th>Available</th><th>Locked</th><th>Reserved fee</th></tr></thead><tbody id="balances"></tbody></table></div><p id="account-error" role="alert"></p>
+<p class="dim" style="font-size:12px">Your exchange balances. The agent above trades simulated money only; this app cannot place real orders or move funds.</p></section>
+<footer>Paper trading only: no live orders. Fills are simulated at bid/ask plus slippage; depth, minimum order size and tax are not modeled. Stops are checked only when the agent polls. <a href="https://docs.cdp.coinbase.com/exchange/">Coinbase market data docs</a></footer>
+</main><script src="/app.js"></script></body></html>

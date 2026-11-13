@@ -1,0 +1,51 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk · Day trades</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><div class="main">
+<header class="top"><div class="top-title"><h1>Day trades</h1><p id="mode">Opening-range breakout · Yahoo 5-minute bars · paper</p></div>
+<div class="controls"><span id="status">Paused</span><button class="primary" id="start" disabled>Start</button><button id="pause" disabled title="Stops further checks, including exits and the flat-by sale.">Pause</button><button id="step" disabled>Run once</button></div></header>
+<main class="content">
+<div id="error" class="banner" role="alert" hidden></div><div id="alerts" class="banner" role="status" hidden></div>
+
+<section class="card hero" aria-label="Account">
+<div class="hero-head"><div><p class="label">Account value</p><span id="equity" class="val num">—</span><p id="return" class="hero-read num">—</p></div>
+<div style="text-align:right"><p class="label" style="justify-content:flex-end">Session</p><p id="clockline" class="sub" style="margin-top:6px"></p><p id="updated" class="dim sub"></p></div></div>
+<div class="session" id="session" aria-hidden="true"></div>
+<div class="session-legend"><span><i style="background:var(--warn)"></i>Opening range</span><span><i style="background:var(--up)"></i>Entry window</span><span><i style="background:var(--rule-2)"></i>Hold, manage exits</span><span><i style="background:var(--down)"></i>Flat before the close</span></div>
+<div class="kpis">
+<div class="kpi"><span class="label">Today</span><span id="today" class="val num">—</span><span id="limit" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Open day trades</span><span id="active" class="val num">—</span><span id="trades-today" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Cash</span><span id="cash" class="val num">—</span><span id="per-trade" class="sub num">—</span></div>
+<div class="kpi"><span class="label">Realized</span><span id="realized" class="val num">—</span><span id="record" class="sub num">—</span></div>
+</div></section>
+
+<section class="cols">
+<div class="stack">
+<div class="card"><h2 class="card-title">Open day trades<span class="sub">stop, entry and target on each track</span></h2><div id="pos-rows" class="rows"></div>
+<p id="pos-empty" class="empty">Nothing open. A buy happens when a watchlist symbol's 5-minute bar closes above its opening range before the entry window ends.</p></div>
+<div class="card"><h2 class="card-title">Watchlist<span class="sub">today's range, where the price sits in it, and the last decision</span></h2><div id="watch-rows" class="rows"></div></div>
+</div>
+<aside class="stack rail">
+<div class="card"><h2 class="card-title">Agent</h2><p id="decision" aria-live="polite">Waiting for data.</p><p id="connection" class="dim sub"></p></div>
+<div class="card"><div class="rules-head"><h2>Rules</h2><button id="edit-rules" type="button" disabled>Edit</button></div><dl id="rules-list"></dl>
+<p class="label" style="margin-top:18px">Rule changes</p><ul id="rl-list" class="dim sub" style="margin:8px 0 0;padding-left:16px"></ul><p id="rl-empty" class="dim sub">No rule has been changed yet.</p></div>
+</aside>
+</section>
+
+<section class="card journal"><div class="head"><h2>Journal</h2><span id="count" class="dim"></span><span class="grow"></span><a href="/api/day/export" class="link" download="day-trades.csv">Export CSV</a></div>
+<div class="wrap"><table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>P&amp;L</th><th>Reason</th></tr></thead><tbody id="rows"></tbody></table></div><p id="empty" class="dim">No day trades yet.</p></section>
+<footer>Paper trading only: no broker, no live orders. Bars and prices are free Yahoo 5-minute data and can lag; fills are simulated at the quote plus 0.05% slippage. Checks run once a minute, so a stop can fill well past its level. Long only. Not investment advice.</footer>
+</main></div></div>
+<dialog id="rules" aria-labelledby="rules-title"><form id="rules-form" method="dialog" class="rules-form">
+<h2 id="rules-title">Edit rules</h2>
+<label class="wide">Watchlist<textarea id="f-symbols" rows="3" spellcheck="false" autocapitalize="characters"></textarea><small>Symbols separated by spaces or commas, up to 40. Each costs one Yahoo request a minute during the session.</small></label>
+<label>Opening range (minutes)<input id="f-or_minutes" type="number" min="5" max="60" step="5" required><small>Bars from 9:30 that set the range. 15 is the classic.</small></label>
+<label>Entries until<input id="f-entries_until" type="time" min="09:35" max="15:59" required><small>A breakout bar that starts at or after this time is not traded.</small></label>
+<label>Flat by<input id="f-flat_by" type="time" min="09:35" max="15:59" required><small>Everything still open is sold at this time.</small></label>
+<label>Max loss per trade ($)<input id="f-risk" type="number" min="1" step="any" required><small>Sizes the position so the loss at the stop is at most this.</small></label>
+<label>Per position ($)<input id="f-per_trade" type="number" min="0" step="any"><small>Cap on the position's cost. 0 = no cap beyond cash. With less cash than this, it buys what is left.</small></label>
+<label>Reward:risk<input id="f-reward_risk" type="number" min="0.5" max="10" step="any" required><small>Target = entry + this × (entry − stop). 2 is the trader-exit default; 3 is the 1:3 rule.</small></label>
+<label>Break-even at (R)<input id="f-breakeven_r" type="number" min="0" max="10" step="any"><small>Once up this many R the stop moves to the entry price. 0 = off.</small></label>
+<label>Trades per day<input id="f-max_trades" type="number" min="0" max="40" step="1"><small>0 = no limit. Each symbol trades at most once a day anyway.</small></label>
+<label>Daily loss limit ($)<input id="f-daily_loss" type="number" min="0" step="any"><small>No new trades once down this much today. 0 = off.</small></label>
+<p id="rules-error" class="wide" role="alert" hidden></p>
+<div class="wide actions"><button type="button" id="rules-cancel">Cancel</button><button class="primary" id="rules-save" type="submit" value="save">Save</button></div>
+</form></dialog>
+<script src="/ui.js"></script><script src="/day.js"></script></body></html>

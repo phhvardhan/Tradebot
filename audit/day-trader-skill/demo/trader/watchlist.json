@@ -1,0 +1,72 @@
+{
+  "created_by": "trader-scanner",
+  "created_at": "2026-10-22T19:10:00Z",
+  "mode": "orb",
+  "as_of": "2026-10-22 15:10 ET",
+  "universe": 12,
+  "scanned": 10,
+  "failed": 0,
+  "unconfirmed": 0,
+  "source": "yahoo",
+  "or_minutes": 15,
+  "interval": "5m",
+  "filters": {
+    "min_price": 5.0,
+    "min_volume": 0
+  },
+  "note": "A scan is a list of charts that match a rule, not a list of stocks to buy.",
+  "hits": [
+    {
+      "symbol": "JPM",
+      "setups": [
+        "orb"
+      ],
+      "price": 335.25,
+      "at": "9:50 AM",
+      "bar_start": "09:45",
+      "bar_index": 3,
+      "or_high": 335.2,
+      "or_low": 332.26,
+      "pct_over": 0.01
+    },
+    {
+      "symbol": "TSLA",
+      "setups": [
+        "orb"
+      ],
+      "price": 383.37,
+      "at": "9:50 AM",
+      "bar_start": "09:45",
+      "bar_index": 3,
+      "or_high": 382.14,
+      "or_low": 373.71,
+      "pct_over": 0.32
+    },
+    {
+      "symbol": "AMD",
+      "setups": [
+        "orb"
+      ],
+      "price": 527.12,
+      "at": "9:55 AM",
+      "bar_start": "09:50",
+      "bar_index": 4,
+      "or_high": 526.28,
+      "or_low": 519.8,
+      "pct_over": 0.16
+    },
+    {
+      "symbol": "NFLX",
+      "setups": [
+        "orb"
+      ],
+      "price": 67.45,
+      "at": "12:05 PM",
+      "bar_start": "12:00",
+      "bar_index": 30,
+      "or_high": 67.24,
+      "or_low": 65.02,
+      "pct_over": 0.31
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk · Action needed</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><div class="main">
+<header class="top"><div class="top-title"><h1>Action needed</h1><p id="mode">What you own · the rules you chose · what needs attention, and why</p></div>
+<div class="controls"><span id="status">Connecting…</span></div></header>
+<main class="content">
+<div id="error" class="banner" role="alert" hidden></div>
+<div id="notes" class="stack" role="status"></div>
+
+<section class="card hero" aria-label="Account">
+<div class="hero-head"><div><p class="label">Your account<span id="account" class="dim" style="text-transform:none;letter-spacing:0;font-weight:400"></span></p><span id="value" class="val num">—</span><p id="synced" class="hero-read">—</p></div>
+<div style="text-align:right"><p class="label" style="justify-content:flex-end">Rules applied</p><p id="rules" class="dim sub" style="margin-top:6px;max-width:420px"></p><p id="checked" class="dim sub"></p></div></div>
+<div class="kpis">
+<div class="kpi"><span class="label">Cash</span><span id="cash" class="val num">—</span><span id="cash-sub" class="sub">—</span></div>
+<div class="kpi"><span class="label">Investments</span><span id="invest" class="val num">—</span><span id="invest-sub" class="sub">—</span></div>
+<div class="kpi"><span class="label">Swing trades</span><span id="swing" class="val num">—</span><span id="swing-sub" class="sub">—</span></div>
+<div class="kpi"><span class="label">Needs a decision</span><span id="todo" class="val num">—</span><span id="todo-sub" class="sub">—</span></div>
+</div></section>
+
+<section><h2 class="card-title">Act now<span class="sub" id="cards-sub">proposals from the last check · you place the order</span></h2>
+<div id="cards" class="desk-cards"></div><p id="cards-empty" class="dim">Nothing needs a decision right now.</p></section>
+
+<section class="card"><h2 class="card-title">Watching<span class="sub">your holdings against their rules</span></h2>
+<div class="wrap"><table class="grid"><thead><tr><th>Holding</th><th>Purpose</th><th>Shares</th><th>Price</th><th>Value</th><th>Since cost</th><th>Rule</th></tr></thead><tbody id="watch-rows"></tbody></table></div>
+<p id="watch-empty" class="dim">No holdings imported yet.</p>
+<p class="dim sub" style="margin-top:14px">Import a brokerage CSV with <code>python3 -m signaldesk.desk import FILE.csv</code>, then tag a lot as a swing trade with <code>python3 -m signaldesk.desk tag SYM swing --entry E --stop S --target T</code>. Swing exits apply only to lots tagged swing; investments are never sold by a swing rule.</p></section>
+
+<footer id="foot">Nothing is placed from here: you decide, you place the order with your broker, then re-import. Prices are free Yahoo quotes with their quote time shown and can lag. A stop can fill at a worse price than the stop level, so every loss here is an estimate. Not investment advice.</footer>
+</main></div></div>
+<script src="/ui.js"></script><script src="/desk.js"></script></body></html>
