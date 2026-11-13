@@ -3,7 +3,7 @@
 server rewrites after every check and alerts when the server cannot be trusted to watch your positions. It works when the server is dead because it does not use the server.
 
 Alerts: no heartbeat (server down or hung), checks failing for a long time while the market is open (feed down: exits are not evaluated), agent paused with open
-positions, a held position with no usable price for 10 minutes, challenger failing, missing NYSE calendar. Each problem alerts once, repeats every 30 minutes while it lasts, and says when it clears.
+positions, a held position with no usable price for 10 minutes, challenger failing, missing NYSE calendar (and, once a day, a calendar that ends within 60 days). Each problem alerts once, repeats every 30 minutes while it lasts, and says when it clears.
 
   python3 -m signaldesk.watchdog            one check (what launchd runs)
   python3 -m signaldesk.watchdog --test     send a test alert to every channel, to see that you get it
@@ -21,6 +21,8 @@ from .core import ROOT, SKILLS
 STALE_OPEN, STALE_CLOSED = 4 * 60, 20 * 60   # seconds with no heartbeat before it counts as down (a check every minute, plus slow feeds)
 FEED_DOWN = 10 * 60                          # seconds without a successful check, market open, before it counts as a feed outage
 REPEAT = 30 * 60                             # re-alert this often while a problem lasts
+CALENDAR_AHEAD = 60 * 86400                  # warn this long before the NYSE calendar runs out
+REPEAT_FOR = {'calendar_soon': 86400}        # a warning, not an outage: once a day
 
 def market_status(now):
     spec = importlib.util.spec_from_file_location('skill_alerts', SKILLS / 'trader-alerts' / 'alerts.py')
@@ -68,6 +70,9 @@ def run_check(data_dir, now, send=notify.send, status_fn=market_status):
     found = problems(beats, now, bool(status.get('open')))
     if not status.get('calendar_known'):
         found['calendar'] = 'The NYSE calendar for this year is not in the trader-alerts skill, so the agent will refuse to trade. Update vendor/trader-alerts/alerts.py.'
+    elif not status_fn(now + CALENDAR_AHEAD).get('calendar_known'):
+        found['calendar_soon'] = (f'The NYSE calendar in vendor/trader-alerts/alerts.py ends within {CALENDAR_AHEAD // 86400} days. '
+                                  'Add next year\'s holidays and early closes, or the agents stop trading on January 1.')
     state_path = data / 'watchdog.json'
     try:
         prior = json.loads(state_path.read_text())
@@ -75,8 +80,8 @@ def run_check(data_dir, now, send=notify.send, status_fn=market_status):
         prior = {}
     sent, state = [], {}
     for key, text in found.items():
-        if key not in prior or now - prior[key] >= REPEAT:
-            send('Signal Desk needs attention', text, urgent=True); sent.append((key, text))
+        if key not in prior or now - prior[key] >= REPEAT_FOR.get(key, REPEAT):
+            send('Signal Desk needs attention', text, urgent=key not in REPEAT_FOR); sent.append((key, text))
             state[key] = now
         else:
             state[key] = prior[key]

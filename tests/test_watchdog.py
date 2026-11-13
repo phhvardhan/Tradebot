@@ -57,7 +57,7 @@ class RunTests(unittest.TestCase):
     def write(self, **kw):
         (self.dir / 'heartbeat-stocks.json').write_text(json.dumps(hb(**kw)))
     def check(self, t, status=OPEN):
-        return watchdog.run_check(self.dir, NOW + t, self.send, lambda now: status)
+        return watchdog.run_check(self.dir, NOW + t, self.send, status if callable(status) else lambda now: status)
 
     def test_alert_once_repeat_after_thirty_minutes_and_say_when_it_recovers(self):
         self.write(age=0)
@@ -78,6 +78,15 @@ class RunTests(unittest.TestCase):
         self.write(age=0)
         self.check(0, dict(open=False, calendar_known=False))
         self.assertIn('calendar', self.sent[0][1])
+    def test_a_calendar_that_ends_within_60_days_warns_once_a_day_not_every_30_minutes(self):
+        self.write(age=0)
+        ends = lambda now: dict(open=False, calendar_known=now < NOW + 30 * 86400)                # the calendar runs out in 30 days
+        cal = lambda: [m[1] for m in self.sent if 'NYSE calendar' in m[1]]                        # the heartbeat goes stale too; only the calendar matters here
+        self.check(0, ends); self.check(31 * 60, ends)
+        self.assertEqual(len(cal()), 1)
+        self.check(86400, ends)
+        self.assertEqual(len(cal()), 2)
+        self.assertIn('stop trading on January 1', cal()[0])
     def test_a_corrupt_heartbeat_is_treated_as_missing_not_a_crash(self):
         (self.dir / 'heartbeat-stocks.json').write_text('{nope')
         self.check(0)
