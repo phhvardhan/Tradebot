@@ -1,9 +1,15 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk · AI brain</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><div class="main">
 <header class="top"><div class="top-title"><h1>AI brain</h1><p id="mode">Trade analyst and strategy researcher</p></div>
-<div class="controls"><span id="status">Connecting…</span><button type="button" id="rollback" hidden>Undo last change</button><button type="button" id="research" class="primary">Run research now</button></div></header>
+<div class="controls"><span id="status">Connecting…</span><button type="button" id="ask-open">Ask the AI</button><button type="button" id="rollback" hidden>Undo last change</button><button type="button" id="research" class="primary">Run research now</button></div></header>
 <main class="content">
 <div id="error" class="banner" role="alert" hidden></div>
 <div id="setup" class="banner" hidden>The AI is off: put <code>OPENROUTER_API_KEY=…</code> in <code>.env</code> (optional: <code>OPENROUTER_MODEL</code>). No restart needed. Until then the rules decide alone, exactly as before.</div>
+
+<section class="card"><div class="agent-head"><h2 class="card-title">Your holdings<span class="sub" id="hold-sub">the AI reviews every Alpaca holding once a day in session · advice only, nothing is sold</span></h2>
+<button type="button" id="hold-run">Review holdings now</button></div>
+<p id="hold-summary" class="trigger"></p>
+<div class="wrap"><table class="grid"><thead><tr><th>Stock</th><th>AI says</th><th>Why</th><th>Risks</th><th>Price then</th></tr></thead><tbody id="hold-rows"></tbody></table></div>
+<p id="hold-empty" class="dim">No holdings review yet.</p></section>
 
 <section class="card hero" aria-label="Scorecard">
 <div class="hero-head"><div><p class="label">Did the AI help?</p><span id="headline" class="val num">—</span><p id="headline-sub" class="hero-read">—</p></div></div>
@@ -24,6 +30,14 @@
 <section class="card"><h2 class="card-title">Trade analyst<span class="sub">every Alpaca buy is reviewed once a day before it can pass</span></h2>
 <div class="wrap"><table class="grid"><thead><tr><th>When</th><th>Stock</th><th>Verdict</th><th>Why</th><th>Price then</th></tr></thead><tbody id="review-rows"></tbody></table></div>
 <p id="reviews-empty" class="dim">No buys reviewed yet. The analyst looks at a buy card on Action needed once its other checks pass.</p></section>
+
+<dialog id="ask" aria-labelledby="ask-title" class="ask">
+<div class="agent-head"><h2 id="ask-title">Ask the AI</h2><button type="button" class="ghost" id="ask-close" aria-label="Close">Close</button></div>
+<p class="dim sub">It sees your Alpaca holdings and their stops and targets, the simulated swing book, the rules, news on the stocks involved and its own reviews, as of now. It can answer, not trade.</p>
+<div id="ask-log" class="ask-log" aria-live="polite"></div>
+<form id="ask-form" class="rules-form ask-form"><label class="wide"><span class="sr-only">Your question</span><textarea id="ask-q" rows="2" maxlength="1000" placeholder="e.g. Why is LLY down? Should I worry about my stops this week?"></textarea></label>
+<div class="actions wide"><span id="ask-msg" class="dim sub grow" role="status"></span><button type="submit" class="primary" id="ask-send">Ask</button></div></form>
+</dialog>
 
 <footer>The analyst sees the setup, recent closes, 48 hours of Yahoo headlines and recent House filings; it cannot see the future, and its record above is measured on later prices.
 The researcher judges recipes on a 5-year replay of a watchlist picked with hindsight, so replay numbers are biased upward. It cannot change the amount per trade, the daily loss limit or new buys a day,

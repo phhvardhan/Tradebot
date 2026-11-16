@@ -62,6 +62,7 @@ def build_app(a, offline=None):
     markets['day'][0].heartbeat_path, markets['day'][0].running = data / 'heartbeat-day.json', not a.paused
     brain = Brain(stocks, data, chat=None if offline else chat)  # offline (tests, drills) never calls OpenRouter
     desk = Desk(stocks, data / 'holdings.json', brain=brain)
+    brain.desk = desk
     return {'desk': (desk, 'desk.html', 'desk.js'), **markets, 'ai': (brain, 'ai.html', 'ai.js')}  # the desk is the home page: what needs attention, and why
 
 def main():

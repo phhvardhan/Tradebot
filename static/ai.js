@@ -13,8 +13,8 @@ function value(k, v) {
   if (k === 'congress_days') return Number(v) ? `a House purchase filed in the last ${v} days` : 'off';
   return Number(v) ? String(v) : 'no limit';
 }
-async function post(path) {
-  const res = await fetch('/api/ai/' + path, {method: 'POST', headers: {'X-App-Token': token}});
+async function post(path, body) {
+  const res = await fetch('/api/ai/' + path, {method: 'POST', headers: {'X-App-Token': token, 'Content-Type': 'application/json'}, body: body ? JSON.stringify(body) : undefined});
   if (!res.ok) throw Error(await res.text());
 }
 function run(r) {
@@ -56,12 +56,48 @@ async function refresh() {
       el('td', '', el('span', 'badge ' + (r.verdict === 'approve' ? 'up' : r.verdict === 'veto' ? 'down' : 'warn'), r.verdict === 'error' ? 'Error' : `${r.verdict === 'approve' ? 'Approved' : 'Vetoed'} · ${Math.round(r.confidence * 100)}%`)),
       el('td', 'why', r.verdict === 'error' ? r.error : (r.reasons || []).join(' ') + (r.sources && r.sources.length ? ` Sources: ${r.sources.join('; ')}` : '')),
       el('td', 'num', r.price ? usd(r.price) : '—'))));
+    holdings(s); chat(s);
     $('reviews-empty').hidden = s.reviews.length > 0; $('review-rows').closest('.wrap').hidden = !s.reviews.length;
   } catch (e) {
     $('error').hidden = false; $('error').textContent = `Dashboard disconnected (${e.message}). Values shown may be stale.`;
     $('status').textContent = 'Disconnected'; $('status').className = 'err';
   }
 }
+function holdings(s) {
+  const h = s.holdings_review;
+  $('hold-run').disabled = !s.configured || s.reviewing; $('hold-run').textContent = s.reviewing ? 'Reviewing…' : 'Review holdings now';
+  $('hold-sub').textContent = h ? `${when(h.at)} · ${h.trigger === 'button' ? 'on request' : 'daily'} · ${h.model || ''} · advice only, nothing is sold` : 'the AI reviews every Alpaca holding once a day in session · advice only, nothing is sold';
+  $('hold-summary').textContent = h ? (h.error ? `Review failed: ${h.error}` : h.summary) : ''; $('hold-summary').hidden = !h;
+  const rows = h && !h.error ? h.holdings : [];
+  $('hold-rows').replaceChildren(...rows.map(r => {
+    const then = Number((h.prices || {})[r.symbol]);
+    return el('tr', '', el('td', '', el('span', 'sym', UI.avatar(r.symbol), r.symbol)),
+      el('td', '', el('span', 'badge ' + (r.verdict === 'hold' ? 'up' : 'down'), `${r.verdict === 'hold' ? 'Hold' : 'Consider exit'} · ${Math.round(r.confidence * 100)}%`)),
+      el('td', 'why', r.reasons.join(' ') + (r.sources.length ? ` Sources: ${r.sources.join('; ')}` : '')), el('td', 'why', r.risks.join(' ')),
+      el('td', 'num', then ? usd(then) : '—'));
+  }));
+  $('hold-empty').hidden = rows.length > 0; $('hold-rows').closest('.wrap').hidden = !rows.length;
+  $('hold-empty').textContent = s.configured ? 'No holdings review yet. It runs once a day while the market is open, or click Review holdings now.' : 'The AI is off.';
+}
+let seen = -1;
+function chat(s) {
+  const log = $('ask-log'), items = s.chat.flatMap(r => [el('p', 'ask-q', r.question), el('p', 'ask-a' + (r.answer ? '' : ' down'), r.answer || `Could not answer: ${r.error}`)]);
+  if (s.asking && s.pending) items.push(el('p', 'ask-q', s.pending), el('p', 'ask-a dim', 'Thinking… free models can take up to a minute.'));
+  if (!items.length) items.push(el('p', 'dim sub', 'No questions yet.'));
+  const n = s.chat.length + (s.asking ? .5 : 0);
+  if (n !== seen) { log.replaceChildren(...items); log.scrollTop = log.scrollHeight; seen = n; }
+  $('ask-send').disabled = !s.configured || s.asking; $('ask-open').disabled = !s.configured;
+}
+$('ask-open').onclick = () => { $('ask').showModal(); $('ask-q').focus(); const l = $('ask-log'); l.scrollTop = l.scrollHeight; };
+$('ask-close').onclick = () => $('ask').close();
+$('ask-q').onkeydown = e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('ask-form').requestSubmit(); } };
+$('ask-form').onsubmit = async e => {
+  e.preventDefault(); const q = $('ask-q').value.trim(); if (!q) return;
+  try { await post('ask', {question: q}); $('ask-q').value = ''; $('ask-msg').textContent = ''; } catch (err) { $('ask-msg').textContent = err.message; }
+  refresh();
+};
+$('hold-run').onclick = async () => { try { await post('holdings'); flash = 'Holdings review started'; } catch (e) { flash = e.message; } refresh(); };
+if (location.hash === '#ask') setTimeout(() => $('ask-open').click(), 300);
 $('research').onclick = async () => { try { await post('research'); flash = 'Research started'; } catch (e) { flash = e.message; } refresh(); };
 $('rollback').onclick = async () => {
   if (Date.now() - armed > 8000) { armed = Date.now(); return refresh(); }

@@ -237,3 +237,69 @@ class EntryBlockTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class FakeDesk:
+    def __init__(self, rows):
+        self.rows = rows
+    def view(self):
+        return dict(holdings=dict(account='Alpaca paper ••••1', cash='900', day_change='-12.5'), watching=self.rows), {}
+
+KO_ROW = dict(symbol='KO', qty='9', avg_cost='100.18', price='99.30', gain='-0.0088', plan=dict(entry='100.18', stop='90.14', target='125.19', bracket=True), to_stop='0.1', to_target='0.26')
+
+def wait(flag):
+    for _ in range(200):
+        if not flag():
+            return
+        time.sleep(0.01)
+    raise AssertionError('thread did not finish')
+
+class HoldingsTests(Base):
+    def test_holdings_are_reviewed_in_one_call_and_only_verdicts_for_held_stocks_count_and_an_exit_notifies_without_selling(self):
+        b = self.brain(answer(summary='Defensive book.', holdings=[dict(symbol='KO', verdict='exit', confidence=0.6, reasons=['Earnings Tuesday'], risks=['gap'], sources=['KO beats estimates']),
+                                                                   dict(symbol='TSLA', verdict='exit', confidence=0.9, reasons=['not held'], risks=[], sources=[])]))
+        b.desk = FakeDesk([KO_ROW])
+        self.assertTrue(b.review_holdings('button')); wait(lambda: b.reviewing)
+        messages, kw = self.chat.seen[0]
+        self.assertIs(kw['schema'], brain.HOLDINGS)
+        ev = json.loads(messages[1]['content'])['holdings'][0]
+        self.assertEqual((ev['symbol'], ev['plan']['stop'], ev['headlines_48h'][0]['title']), ('KO', '90.14', 'KO beats estimates'))
+        r = b.snapshot()['holdings_review']
+        self.assertEqual([(h['symbol'], h['verdict']) for h in r['holdings']], [('KO', 'exit')])   # TSLA is not held: dropped
+        self.assertEqual((r['summary'], r['prices']), ('Defensive book.', {'KO': '99.30'}))
+        self.assertIn('KO', self.notes[0][1]); self.assertIn('Nothing was sold', self.notes[0][1])
+
+    def test_it_runs_once_a_day_in_session_and_a_failure_is_retried_later(self):
+        b = self.brain(ValueError('busy'))
+        b.desk = FakeDesk([KO_ROW])
+        self.e.s['market'] = dict(open=False)
+        self.assertFalse(b.holdings_due())
+        self.e.s['market'] = dict(open=True)
+        self.assertTrue(b.holdings_due())
+        b.review_holdings(); wait(lambda: b.reviewing)
+        self.assertIn('busy', b.snapshot()['holdings_review']['error'])
+        self.assertFalse(b.holdings_due())                                          # retried after RETRY_HOLDINGS, not at once
+        b.desk = FakeDesk([])
+        self.assertFalse(b.review_holdings())                                        # nothing held, nothing to ask
+
+class AskTests(Base):
+    def test_a_question_is_answered_from_the_live_book_and_follow_ups_carry_the_earlier_answers(self):
+        b = self.brain(say('KO is 1% under cost, 10% above its stop.'), say('Its target is 125.19.'))
+        b.desk = FakeDesk([KO_ROW])
+        self.assertEqual(b.ask({'question': '  '}), 'Type a question first.')
+        self.assertIsNone(b.ask({'question': 'How is KO doing?'})); wait(lambda: b.asking)
+        messages, kw = self.chat.seen[0]
+        self.assertNotIn('tools', kw)
+        live = json.loads(messages[1]['content'].removeprefix('Live data:\n'))
+        self.assertEqual((live['alpaca_paper']['holdings'][0]['symbol'], live['alpaca_paper']['cash'], live['headlines_48h']['KO'][0]['title']), ('KO', '900', 'KO beats estimates'))
+        self.assertIn('cannot place', messages[0]['content'])
+        b.ask({'question': 'And its target?'}); wait(lambda: b.asking)
+        follow = self.chat.seen[1][0]
+        self.assertEqual([m['content'] for m in follow[-3:]], ['How is KO doing?', 'KO is 1% under cost, 10% above its stop.', 'And its target?'])
+        self.assertEqual([r['answer'] for r in b.snapshot()['chat']], ['KO is 1% under cost, 10% above its stop.', 'Its target is 125.19.'])
+
+    def test_a_failed_answer_is_shown_as_an_error_and_without_a_key_nothing_is_sent(self):
+        b = self.brain(ValueError('OpenRouter answered 429'))
+        b.ask({'question': 'Anything?'}); wait(lambda: b.asking)
+        self.assertIn('429', b.snapshot()['chat'][-1]['error'])
+        with patch.dict(os.environ, {'OPENROUTER_API_KEY': ''}):
+            self.assertIn('OPENROUTER_API_KEY', b.ask({'question': 'Anything?'}))
