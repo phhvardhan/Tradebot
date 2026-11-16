@@ -206,6 +206,18 @@ class ChatTests(unittest.TestCase):
         self.assertEqual((body['model'], body['response_format']['type'], body['usage']), (brain.MODEL, 'json_schema', dict(include=True)))
         self.assertEqual(use, dict(model='anthropic/claude-opus-5.5', cost=0.0012, tokens_in=10, tokens_out=5))
 
+    def test_a_comma_separated_model_setting_becomes_openrouters_fallback_list(self):
+        sent = []
+        class Res(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+        def urlopen(req, timeout):
+            sent.append(json.loads(req.data))
+            return Res(json.dumps(dict(model='b:free', choices=[dict(message=dict(role='assistant', content='ok'))], usage={})).encode())
+        with patch.dict(os.environ, {'OPENROUTER_API_KEY': 'k', 'OPENROUTER_MODEL': 'a:free, b:free'}), patch.object(brain, 'urlopen', urlopen):
+            _, use = brain.chat([])
+        self.assertEqual((sent[0]['model'], sent[0]['models'], use['model'], use['cost']), ('a:free', ['a:free', 'b:free'], 'b:free', 0.0))
+
     def test_no_key_refuses_before_sending_and_an_http_error_is_reported_without_the_key(self):
         with patch.dict(os.environ, {'OPENROUTER_API_KEY': ''}), self.assertRaises(ValueError):
             brain.chat([])

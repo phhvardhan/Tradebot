@@ -10,7 +10,7 @@ forward-test wait) through the same checks as the dashboard's rule form. It can 
 the replay gate, and orders still go to the Alpaca paper account only.
 
 Every review and run is a line in data/ai-log.jsonl with the model, tokens and cost; the AI page shows them and a scorecard. Keys: OPENROUTER_API_KEY in .env,
-OPENROUTER_MODEL to pick another model."""
+OPENROUTER_MODEL to pick another model (or several, comma-separated, tried in order)."""
 import json
 import threading
 import time
@@ -39,7 +39,8 @@ def chat(messages, tools=None, schema=None, max_tokens=8000, timeout=240):
     key = secret('OPENROUTER_API_KEY')
     if not key:
         raise ValueError('OPENROUTER_API_KEY is not set in .env')
-    body = dict(model=secret('OPENROUTER_MODEL') or MODEL, messages=messages, max_tokens=max_tokens, usage=dict(include=True))
+    models = [m.strip() for m in (secret('OPENROUTER_MODEL') or MODEL).split(',') if m.strip()]  # 'a,b,c': OpenRouter falls back down the list when one is down or busy
+    body = dict(model=models[0], messages=messages, max_tokens=max_tokens, usage=dict(include=True), **(dict(models=models) if len(models) > 1 else {}))
     if tools:
         body['tools'] = tools
     if schema:
