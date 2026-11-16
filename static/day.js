@@ -45,6 +45,8 @@ function render(s) {
   last = s; token = s.token; s.trades = s.trades || [];
   UI.controls('day', s, pending); $('edit-rules').disabled = false;
   const m = s.market || {}; UI.clock(m);
+  $('mode').textContent = 'Opening-range breakout · Yahoo 5-minute bars · ' + (s.alpaca ? 'orders at Alpaca paper' : 'simulated fills');
+  $('foot').textContent = s.alpaca ? 'Every buy and sell is a real order on your Alpaca paper account: a bracket buy (whole shares) whose stop and target stand at Alpaca, a market sale at the flat-by time. Prices in the journal are Alpaca\'s fills. Signals use free Yahoo 5-minute bars, checked once a minute. Long only. Not investment advice.' : FOOT;
   const eq = Number(s.equity), cap = Number(s.capital), today = eq - Number(s.day_start), pos = Object.entries(s.positions), tradesToday = Object.values(s.traded).filter(d => d === s.day).length;
   const held = pos.length, age = s.updated ? Date.now() / 1000 - s.updated : 0;
   const warn = !s.running && held ? `Agent is paused with ${held} open day trade${held > 1 ? 's' : ''}: the stop, target and flat-by sale are NOT being checked. Press Start.`
@@ -95,6 +97,7 @@ function render(s) {
   }
 }
 
+const FOOT = $('foot').textContent;
 async function poll() { try { render(await (await fetch('/api/day/state')).json()); } catch (e) { $('error').hidden = false; $('error').textContent = 'Cannot reach the server.'; } }
 const post = (path, body) => fetch('/api/day/' + path, {method: 'POST', headers: {'X-App-Token': token, 'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
 for (const k of ['start', 'pause', 'step']) $(k).onclick = async () => { pending = true; $(k).disabled = true; await post(k); pending = false; poll(); };

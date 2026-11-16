@@ -61,6 +61,11 @@ Or double-click `Start Signal Desk.command`.
   the stop is the middle of the range, the target is 2× the risk, the position is sized so the loss at the stop is at most $50 (and at most $1000 a position),
   the stop moves to the entry once up 1R, and everything is sold by 15:55. One trade per symbol a day, 3 a day, none once down $100 on the day. A breakout bar older
   than ten minutes is reported as missed, never chased. Long only, no replay (Yahoo keeps 60 days of 5-minute bars), checks once a minute.
+  **With Alpaca keys in `.env`, every day trade is a real order on the Alpaca paper account** (`day.Alpaca`): the buy is a bracket (whole shares at market,
+  the stop and target as standing orders there, client id `sd-day-buy-SYM-DAY`), the break-even move changes that stop order, and the flat-by sale cancels
+  the bracket and sells what Alpaca holds at market. The journal records Alpaca's fill prices; a stop or target that fills at Alpaca is recorded from its fill.
+  A symbol Alpaca already holds (a swing lot) is skipped, a refused buy is not retried that day, a failed sale is retried every minute, and every order is in
+  `data/orders-alpaca.jsonl` next to the desk's. The day agent's $5000 is its budget inside the paper account. Without keys, fills are simulated as before.
 - `/funds`: paper SIPs into Indian (AMFI NAVs via mfapi.in, in rupees) and US (Yahoo, in dollars) mutual funds, following the MoneyPurse rules: monthly buys at the
   first NAV of the month, optional yearly step-up, a horizon check per category, a pause on overheated thematic funds, XIRR per portfolio.
 

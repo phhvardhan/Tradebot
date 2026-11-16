@@ -2,7 +2,10 @@ import unittest
 from datetime import date, datetime, time
 from decimal import Decimal as D
 from time import time as time_now
-from signaldesk.day import DayEngine, scan
+import json
+import tempfile
+from pathlib import Path
+from signaldesk.day import Alpaca, DayEngine, scan
 
 DAY = date(2026, 11, 12)  # a Thursday, regular session
 EPOCH = datetime(1970, 1, 1)
@@ -145,6 +148,135 @@ class DayTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class FakeAlpaca:
+    """Paper account in memory: market orders fill at `px`, a bracket gets stop and target legs, cancels and patches are recorded."""
+    def __init__(self):
+        self.px, self.orders, self.pos, self.calls, self.n, self.fail = D('102.70'), {}, {}, [], 0, None
+    def oid(self):
+        self.n += 1; return f'o{self.n}'
+    def get(self, path, params=None):
+        self.calls.append(('GET', path))
+        if path == '/v2/positions':
+            return [dict(symbol=k, qty=str(v), side='long') for k, v in self.pos.items() if v]
+        if path == '/v2/orders':
+            return [o for o in self.orders.values() if o['status'] in ('new', 'held', 'accepted') and o['symbol'] == params['symbols']]
+        o = self.orders[path.rsplit('/', 1)[1]]
+        return dict(o, legs=[self.orders[i] for i in o.get('leg_ids', ())])
+    def send(self, method, path, body=None):
+        self.calls.append((method, path, body))
+        if self.fail:
+            raise ValueError(self.fail)
+        if method == 'DELETE':
+            o = self.orders[path.rsplit('/', 1)[1]]; o['status'] = 'canceled'
+            for i in o.get('pair', ()):
+                self.orders[i]['status'] = 'canceled'
+            return {}
+        if method == 'PATCH':
+            self.orders[path.rsplit('/', 1)[1]]['stop_price'] = body['stop_price']; return {}
+        sym, qty, side = body['symbol'], D(body['qty']), body['side']
+        o = dict(id=self.oid(), symbol=sym, side=side, status='filled', filled_qty=str(qty), filled_avg_price=str(self.px), qty=str(qty))
+        self.orders[o['id']] = o
+        self.pos[sym] = self.pos.get(sym, D(0)) + (qty if side == 'buy' else -qty)
+        if body.get('order_class') == 'bracket':
+            st = dict(id=self.oid(), symbol=sym, side='sell', type='stop', status='held', stop_price=body['stop_loss']['stop_price'], qty=str(qty))
+            tp = dict(id=self.oid(), symbol=sym, side='sell', type='limit', status='new', limit_price=body['take_profit']['limit_price'], qty=str(qty))
+            st['pair'], tp['pair'] = [tp['id']], [st['id']]
+            self.orders.update({st['id']: st, tp['id']: tp}); o['leg_ids'] = [st['id'], tp['id']]
+        return o
+    def fill_leg(self, kind, price):
+        leg = next(o for o in self.orders.values() if o.get('type') == {'stop': 'stop', 'target': 'limit'}[kind] and o['status'] in ('new', 'held'))
+        leg.update(status='filled', filled_qty=leg['qty'], filled_avg_price=str(price))
+        self.orders[leg['pair'][0]]['status'] = 'canceled'
+        self.pos[leg['symbol']] -= D(leg['qty'])
+
+class AlpacaDayTests(unittest.TestCase):
+    """Day trades placed at Alpaca: the same rules, real (fake) orders, Alpaca's fills in the book."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        self.log = Path(self.tmp.name) / 'orders-alpaca.jsonl'
+        self.a = FakeAlpaca(); self.alerts = []
+        self.e = DayEngine(':memory:', ['AAA', 'BBB'], notify=self.alerts.append, broker=Alpaca(self.log, self.a.get, self.a.send, sleep=lambda s: None))
+    def posts(self):
+        return [c[2] for c in self.a.calls if c[0] == 'POST']
+    def logged(self):
+        return [json.loads(x) for x in self.log.read_text().splitlines()]
+    def buy(self):
+        self.e.apply(status('09:50'), data('102.6'))
+        return self.e.s['positions']['AAA']
+
+    def test_a_breakout_is_a_whole_share_bracket_at_alpaca_and_the_book_uses_alpacas_fill(self):
+        p = self.buy()
+        b = self.posts()[0]
+        self.assertEqual((b['symbol'], b['side'], b['type'], b['order_class'], b['time_in_force'], b['client_order_id']), ('AAA', 'buy', 'market', 'bracket', 'gtc', 'sd-day-buy-AAA-2026-11-12'))
+        self.assertEqual(b['qty'], '9')                                                  # $1000 cap / 102.65 = 9.74 -> 9 whole shares
+        self.assertEqual(b['stop_loss']['stop_price'], '101.00'); self.assertEqual(D(b['take_profit']['limit_price']), D(p['target']))
+        self.assertEqual((D(p['qty']), D(p['entry']), D(p['cost'])), (D(9), D('102.70'), D('924.30')))   # Alpaca's fill, not the quote
+        self.assertEqual(D(self.e.s['cash']), D(5000) - D('924.30'))
+        self.assertEqual(self.logged()[0]['event'], 'day'); self.assertTrue(self.logged()[0]['ok'])
+        self.assertIn('Bought at Alpaca', self.e.s['decisions']['AAA'])
+
+    def test_a_stop_filled_at_alpaca_is_recorded_at_its_fill_without_a_second_sale(self):
+        self.buy()
+        self.a.fill_leg('stop', '100.98')
+        self.e.apply(status('10:30'), data('100.9'))
+        t = self.e.snapshot()['trades'][0]
+        self.assertEqual((t['side'], D(t['price'])), ('SELL', D('100.98'))); self.assertIn('Stop order filled at Alpaca', t['reason'])
+        self.assertEqual(len(self.posts()), 1)                                           # nothing more was sent
+        self.assertEqual(self.e.s['positions'], {})
+        self.assertEqual(D(self.e.s['realized']), 9 * (D('100.98') - D('102.70')))
+
+    def test_flat_by_cancels_the_bracket_then_sells_what_alpaca_holds(self):
+        self.buy()
+        self.e.apply(status('15:55'), data('103'))
+        self.assertEqual([c[0] for c in self.a.calls if c[0] in ('DELETE', 'POST')], ['POST', 'DELETE', 'DELETE', 'POST'])
+        sell = self.posts()[1]
+        self.assertEqual((sell['side'], sell['type'], sell['qty']), ('sell', 'market', '9'))
+        self.assertEqual(self.a.pos['AAA'], 0); self.assertEqual(self.e.s['positions'], {})
+        self.assertIn('Sold at Alpaca', self.e.snapshot()['trades'][0]['reason'])
+        self.assertEqual([r['side'] for r in self.logged()], ['buy', 'sell'])
+
+    def test_break_even_moves_the_stop_order_at_alpaca(self):
+        p = self.buy(); entry, risk = D(p['entry']), D(p['entry']) - D(p['stop'])
+        self.e.apply(status('10:00'), data(entry + risk * D('1.05')))
+        patch = [c for c in self.a.calls if c[0] == 'PATCH']
+        self.assertEqual(len(patch), 1); self.assertEqual(patch[0][2], dict(stop_price='102.70'))
+        self.assertEqual(self.e.s['positions']['AAA']['stop'], '102.70')
+        self.a.fail = 'busy'                                                             # a failed move is retried, never assumed
+        self.e.s['positions']['AAA']['be'] = False
+        self.e.apply(status('10:01'), data(entry + risk * D('1.05')))
+        self.assertIn('failed', self.e.s['decisions']['AAA']); self.assertFalse(self.e.s['positions']['AAA']['be'])
+
+    def test_a_refused_buy_is_not_retried_every_minute_and_a_failed_sale_keeps_the_position(self):
+        self.a.fail = 'insufficient buying power'
+        self.e.apply(status('09:50'), data('102.6'))
+        self.assertEqual(self.e.s['positions'], {}); self.assertIn('insufficient buying power', self.e.s['decisions']['AAA'])
+        self.e.apply(status('09:51'), data('102.6'))
+        self.assertIn('Done for today', self.e.s['decisions']['AAA'])
+        self.assertEqual(len(self.posts()), 1); self.assertFalse(self.logged()[0]['ok'])
+        self.a.fail = None; self.e.s['traded'] = {}
+        self.buy(); self.a.fail = 'down'
+        self.e.apply(status('15:55'), data('103'))
+        self.assertIn('AAA', self.e.s['positions']); self.assertIn('trying again', self.e.s['decisions']['AAA'])
+        self.a.fail = None
+        self.e.apply(status('15:56'), data('103'))
+        self.assertEqual(self.e.s['positions'], {})
+        self.assertEqual(sum('Selling AAA at Alpaca failed' in t for t in self.alerts), 1)  # alerted once, not every minute
+
+    def test_a_symbol_alpaca_already_holds_and_a_size_under_one_share_are_skipped(self):
+        self.a.pos['AAA'] = D(5)                                                          # the swing agent's lot
+        self.e.apply(status('09:50'), data('102.6'))
+        self.assertIn('already holds AAA', self.e.s['decisions']['AAA']); self.assertEqual(self.posts(), [])
+        self.a.pos = {}; self.e.set_rules(dict(per_trade='50'))
+        self.e.apply(status('09:51'), data('102.6'))
+        self.assertIn('0 whole shares', self.e.s['decisions']['AAA']); self.assertEqual(self.posts(), [])
+
+    def test_a_buy_the_book_lost_is_adopted_from_the_order_log(self):
+        self.buy()
+        self.e.s['positions'] = {}                                                        # as if the check rolled back after the order
+        self.e.apply(status('10:00'), data('102.8'))
+        self.assertIn('AAA', self.e.s['positions']); self.assertTrue(any('tracked again' in t for t in self.alerts))
+        self.assertEqual(len(self.posts()), 1)
 
 class DayBackupTest(unittest.TestCase):
     def test_day_database_is_backed_up(self):

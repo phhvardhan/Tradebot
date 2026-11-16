@@ -76,7 +76,7 @@ function agent(a) {
   $('cards-sub').textContent = st.mode === 'auto' ? 'the agent places every card that passes, within your limits' : st.mode === 'ask' ? 'Place order on a card that passes sends it to Alpaca paper' : 'proposals from the last check · you place the order';
   if (!dirty) for (const k of ['per_trade', 'max_new', 'daily_loss']) $('a-' + k).value = st[k];
   $('order-rows').replaceChildren(...a.orders.map(o => el('tr', '', el('td', '', when(o.at)), el('td', '', `${o.side === 'buy' ? 'Buy' : 'Sell'} ${Number(o.qty)} ${o.symbol}` + (o.plan ? ` · stop ${px(o.plan.stop)} · target ${px(o.plan.target)}` : '')),
-    el('td', '', o.mode === 'auto' ? 'Automatic' : 'You'), tone(el('td', 'why', o.ok ? `Accepted (${o.status || 'sent'})` : o.error), o.ok ? 0 : -1))));
+    el('td', '', o.mode === 'auto' ? 'Automatic' : o.mode === 'day' ? 'Day trades' : 'You'), tone(el('td', 'why', o.ok ? `Accepted (${o.status || 'sent'})` : o.error), o.ok ? 0 : -1))));
   $('orders-empty').hidden = a.orders.length > 0; $('order-rows').closest('.wrap').hidden = !a.orders.length;
 }
 async function save(body, msg) {

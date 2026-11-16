@@ -5,7 +5,7 @@ from pathlib import Path
 from . import congress as congress_data
 from . import day, funds
 from .account import AccountMonitor
-from .core import D, ROOT, positive
+from .core import D, ROOT, positive, secret
 from .desk import Desk
 from .server import serve
 from .swing import DEFAULT_RULES, WATCHLIST, build, build_challenger, build_crypto, history, replay, saved_rules
@@ -54,7 +54,8 @@ def build_app(a, offline=None):
     if offline and 'funds' in offline:
         markets['funds'][0].fetch = offline['funds']
     markets['funds'][0].running = not a.paused
-    markets['day'] = (day.build_day(':memory:' if offline else data / 'day.sqlite', symbols), 'day.html', 'day.js')
+    broker = None if offline or not secret('ALPACA_KEY_ID') else day.Alpaca(data / 'orders-alpaca.jsonl')  # day trades go to Alpaca paper when keys are set
+    markets['day'] = (day.build_day(':memory:' if offline else data / 'day.sqlite', symbols, broker=broker), 'day.html', 'day.js')
     if offline:
         markets['day'][0].fetch, markets['day'][0].status, markets['day'][0].notify = offline.get('day', lambda syms, now: ({}, {})), offline['status'], None
     markets['day'][0].heartbeat_path, markets['day'][0].running = data / 'heartbeat-day.json', not a.paused
