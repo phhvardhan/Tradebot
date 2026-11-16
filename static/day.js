@@ -46,6 +46,7 @@ function render(s) {
   UI.controls('day', s, pending); $('edit-rules').disabled = false;
   const m = s.market || {}; UI.clock(m);
   $('mode').textContent = 'Opening-range breakout · Yahoo 5-minute bars · ' + (s.alpaca ? 'orders at Alpaca paper' : 'simulated fills');
+  $('alpaca-link').hidden = !s.alpaca;
   $('eq-label').textContent = s.alpaca ? 'Day budget · Alpaca paper' : 'Account value';
   $('price-h').textContent = s.alpaca ? 'Fill' : 'Price';
   $('foot').textContent = s.alpaca ? 'Every buy and sell is a real order on your Alpaca paper account: a bracket buy (whole shares) whose stop and target stand at Alpaca, a market sale at the flat-by time. Journal rows tagged Alpaca carry Alpaca\'s fill prices; untagged rows are from before, when fills were simulated. Signals use free Yahoo 5-minute bars, checked once a minute. Long only. Not investment advice.' : FOOT;
