@@ -5,6 +5,7 @@ from pathlib import Path
 from . import congress as congress_data
 from . import day, funds
 from .account import AccountMonitor
+from .brain import Brain, chat
 from .core import D, ROOT, positive, secret
 from .desk import Desk
 from .server import serve
@@ -59,7 +60,9 @@ def build_app(a, offline=None):
     if offline:
         markets['day'][0].fetch, markets['day'][0].status, markets['day'][0].notify = offline.get('day', lambda syms, now: ({}, {})), offline['status'], None
     markets['day'][0].heartbeat_path, markets['day'][0].running = data / 'heartbeat-day.json', not a.paused
-    return {'desk': (Desk(stocks, data / 'holdings.json'), 'desk.html', 'desk.js'), **markets}  # the desk is the home page: what needs attention, and why
+    brain = Brain(stocks, data, chat=None if offline else chat)  # offline (tests, drills) never calls OpenRouter
+    desk = Desk(stocks, data / 'holdings.json', brain=brain)
+    return {'desk': (desk, 'desk.html', 'desk.js'), **markets, 'ai': (brain, 'ai.html', 'ai.js')}  # the desk is the home page: what needs attention, and why
 
 def main():
     a = parse_args()

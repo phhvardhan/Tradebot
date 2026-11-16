@@ -18,9 +18,9 @@ def _news():
     spec.loader.exec_module(mod)
     return mod
 
-def note(sym, hours=48):
-    """'News: 3 headlines in 48h (earnings, analyst).' or 'News: no headlines in 48h.' or '' when the feed is unavailable."""
-    hit = _cache.get(sym)
+def headlines(sym, hours=48):
+    """Yahoo headlines for `sym` from the last `hours`, newest first: [{time, title, summary, tags}]. None when the feed is unavailable. Cached for TTL."""
+    hit = _cache.get((sym, hours))
     if hit and time.time() - hit[0] < TTL:
         return hit[1]
     try:
@@ -30,10 +30,18 @@ def note(sym, hours=48):
             items = news.parse_rss(resp.read(), sym)
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
         recent = [i for i in items if i['time'] and i['time'].astimezone(timezone.utc) >= cutoff] if items and hasattr(items[0]['time'], 'astimezone') else []
-        tags = sorted({t for i in news.tag(recent, {sym: ''}) for t in i['tags']})
-        text = f'News: {len(recent)} headline{"s" * (len(recent) != 1)} in {hours}h' + (f' ({", ".join(tags)}).' if tags else '.') if recent else f'News: no headlines in {hours}h.'
+        out = [dict(time=i['time'].astimezone(timezone.utc).isoformat(), title=i['title'], summary=(i.get('summary') or '')[:300], tags=i['tags'])
+               for i in sorted(news.tag(recent, {sym: ''}), key=lambda i: i['time'], reverse=True)]
     except Exception:
-        _cache[sym] = (time.time() - TTL + 300, '')  # remember the miss for 5 minutes so a dead feed is not retried on every check
+        _cache[(sym, hours)] = (time.time() - TTL + 300, None)  # remember the miss for 5 minutes so a dead feed is not retried on every check
+        return None
+    _cache[(sym, hours)] = (time.time(), out)
+    return out
+
+def note(sym, hours=48):
+    """'News: 3 headlines in 48h (earnings, analyst).' or 'News: no headlines in 48h.' or '' when the feed is unavailable."""
+    recent = headlines(sym, hours)
+    if recent is None:
         return ''  # no feed, no note; a missing note is not a reason to skip a trade
-    _cache[sym] = (time.time(), text)
-    return text
+    tags = sorted({t for i in recent for t in i['tags']})
+    return f'News: {len(recent)} headline{"s" * (len(recent) != 1)} in {hours}h' + (f' ({", ".join(tags)}).' if tags else '.') if recent else f'News: no headlines in {hours}h.'

@@ -24,7 +24,7 @@ from urllib.request import Request, urlopen
 
 from .core import D, ROOT, secret
 from .quotes import scan
-from .swing import SECTOR, STALE
+from .swing import ENTRIES, SECTOR, STALE
 
 HOLDINGS = ROOT / 'data' / 'holdings.json'
 SYNC_EVERY = 5 * 60    # the server re-reads the broker this often when Alpaca keys are set
@@ -195,10 +195,20 @@ def text(why):
     t = why.removeprefix('Signal, but ').removeprefix('entries blocked: ')
     return t[0].upper() + t[1:]
 
-def actions(h, e, now=None, settings=None, bought=()):
+def ai_check(v):
+    """The AI analyst's verdict as a check line (ai=True marks it, so the desk can tell which cards wait only on the analyst)."""
+    if not v:
+        return dict(ok=False, ai=True, text='AI analyst has not reviewed it yet (it reviews at the next check)')
+    if v.get('verdict') == 'error':
+        return dict(ok=False, ai=True, text=f'AI analyst unavailable ({v.get("error", "")[:120]}); tried again at the next check')
+    why = (v.get('reasons') or [''])[0]
+    return dict(ok=v['verdict'] == 'approve', ai=True, text=f'AI analyst {"approves" if v["verdict"] == "approve" else "vetoes"} ({float(v.get("confidence", 0)):.0%} sure): {why}')
+
+def actions(h, e, now=None, settings=None, bought=(), analyst=None):
     """What needs attention: sells for swing lots at their stop or target, buys for today's breakouts, each re-checked against the real account and your rules;
     plus the holdings being watched and every reason the picture may be incomplete. `e` is the stocks engine (rules, last quotes, replay gate).
-    `settings` (the Alpaca agent's limits) replaces the stock agent's size and buys-a-day; `bought` lists the symbols the agent already bought today."""
+    `settings` (the Alpaca agent's limits) replaces the stock agent's size and buys-a-day; `bought` lists the symbols the agent already bought today;
+    `analyst` (the AI brain, when its key is set) adds its verdict on each buy as one more check."""
     now = now or time.time()
     with e.lock:
         s = e.s
@@ -256,8 +266,9 @@ def actions(h, e, now=None, settings=None, bought=()):
     cash = None if not h or h.get('cash') is None else D(h['cash'])
     for sym in symbols:
         q = quotes.get(sym)
-        if not q or len(q[2]) < 30 or 'breakout_20d' not in scan.find_setups(q[2])[0]:
-            continue  # the same test the paper agent runs, on the closes it saved: yesterday's close above the 20 before it
+        setup = e.signal(q[2]) if q else None
+        if not setup:
+            continue  # the same test the paper agent runs, on the closes it saved: the recipe's entry setups (by default, yesterday's close above the 20 before it)
         price, closes, at = D(q[0]), q[2], q[3] if len(q) > 3 else None
         checks = [dict(ok=sym not in [p['symbol'] for p in swing], text='Already in a swing trade on it' if sym in [p['symbol'] for p in swing] else 'No open swing trade on it')]
         if alpaca and sym in [p['symbol'] for p in positions] and sym not in [p['symbol'] for p in swing]:
@@ -275,7 +286,7 @@ def actions(h, e, now=None, settings=None, bought=()):
         if r['max_sector']:
             n = sum(SECTOR.get(p['symbol'], p['symbol']) == SECTOR.get(sym, sym) for p in swing)
             checks.append(dict(ok=n < r['max_sector'], text=f'{n} of {r["max_sector"]:.0f} open in {SECTOR.get(sym, "this sector")}'))
-        for why in (e.price_block(dict(closes=[(None, c) for c in closes], price=price)), e.edge_block(), e.congress_block(sym, today)):
+        for why in (e.price_block(dict(closes=[(None, c) for c in closes], price=price), setup), e.edge_block(), e.congress_block(sym, today)):
             if why:
                 checks.append(dict(ok=False, text=text(why)))
         if cash is not None:
@@ -283,6 +294,8 @@ def actions(h, e, now=None, settings=None, bought=()):
         if stale := fresh(at):
             checks.append(stale)
         checks.append(dict(ok=is_open, text='Market open' if is_open else 'Market closed: the entry waits for the open'))
+        if analyst is not None and analyst.configured():
+            checks.append(ai_check(analyst.verdict(sym, today)))
         budget = r['per_trade'] or (cash if cash and cash >= 1 else D(0))
         if cash is not None and cash >= 1:
             budget = min(budget, cash)  # with no cash the card still shows what the rule would size, and the cash check fails
@@ -291,7 +304,8 @@ def actions(h, e, now=None, settings=None, bought=()):
             checks.append(dict(ok=False, text=f'Size is 0 shares: one share costs more than ${budget:.0f} a trade' if alpaca and budget > 0 else
                                               'Size is 0 shares: set a per-position cap on the US stocks page, or import your cash'))
         stop_px, target_px = price * (1 - r['stop']), price * (1 + r['target'])
-        out['cards'].append(dict(action='BUY', symbol=sym, trigger=f'Close {closes[-1]:.2f} broke the 20-day closing high {max(closes[-21:-1]):.2f}. Agent: {decisions.get(sym, "—")}',
+        trigger = f'Close {closes[-1]:.2f} broke the 20-day closing high {max(closes[-21:-1]):.2f}.' if setup == 'breakout_20d' else f'{setup}: {ENTRIES[setup]} Last close {closes[-1]:.2f}.'
+        out['cards'].append(dict(action='BUY', symbol=sym, setup=setup, trigger=f'{trigger} Agent: {decisions.get(sym, "—")}',
                                  price=str(price), quote_at=at, qty=str(qty), cost=str(qty * price), stop=str(stop_px), target=str(target_px), est_loss=str(qty * (price - stop_px)),
                                  est_note=f'Loss if the stop fills at {stop_px:.2f}. A stop can fill lower (a gap, a fast market), so this is an estimate, not a limit.',
                                  checks=checks, passes=all(c['ok'] for c in checks)))
@@ -314,8 +328,8 @@ class Desk:
     """The 'market' behind /desk. Every request reads the holdings file and the stocks agent's last check. With Alpaca keys it syncs every 5 minutes and,
     in 'ask' or 'auto' mode, places paper orders: a buy is a bracket (market entry, stop and target held at Alpaca as orders that stay open until filled
     or cancelled), a sale is a market order for a swing lot that has no bracket. Every attempt is a line in data/orders-alpaca.jsonl."""
-    def __init__(self, stocks, path=HOLDINGS, get=alpaca_get, send=alpaca_send):
-        self.stocks, self.path, self.running, self.error, self.get, self.send = stocks, Path(path), False, None, get, send
+    def __init__(self, stocks, path=HOLDINGS, get=alpaca_get, send=alpaca_send, brain=None):
+        self.stocks, self.path, self.running, self.error, self.get, self.send, self.brain = stocks, Path(path), False, None, get, send, brain
         self.lock, self.wake, self.order_error = threading.RLock(), threading.Event(), None
         self.settings_path, self.log_path = self.path.parent / 'desk-settings.json', self.path.parent / 'orders-alpaca.jsonl'
         stocks.extra = Held(self.path)  # held but not on the watchlist: quoted at every check, never traded
@@ -371,7 +385,7 @@ class Desk:
 
     def view(self, h=None):
         st = self.settings()
-        return actions(load(self.path) if h is None else h, self.stocks, settings=st, bought=self.bought_today()), st
+        return actions(load(self.path) if h is None else h, self.stocks, settings=st, bought=self.bought_today(), analyst=self.brain), st
 
     def place(self, symbol, side, mode):
         """Place the paper order the card for (symbol, side) proposes, after a fresh sync and a fresh check. Returns (ok, text)."""
@@ -437,6 +451,15 @@ class Desk:
         if changed:
             save(h, self.path)
 
+    def think(self):
+        """Ask the AI analyst about every buy card whose other checks all pass, in session, once per symbol and day (a failed review is retried)."""
+        if not self.brain or not self.brain.configured() or not (self.stocks.s.get('market') or {}).get('open'):
+            return
+        out, _ = self.view()
+        for c in out['cards']:
+            if c['action'] == 'BUY' and all(k['ok'] for k in c['checks'] if not k.get('ai')) and not any(k['ok'] for k in c['checks'] if k.get('ai')):
+                self.brain.review(c['symbol'], self.today(), c)
+
     def auto(self):
         """Automatic mode: place every order whose card passes, sales first. The cards hold every limit; nothing else decides."""
         if self.settings()['mode'] != 'auto' or not (self.stocks.s.get('market') or {}).get('open'):
@@ -460,6 +483,10 @@ class Desk:
     def worker(self):
         while True:
             self.sync()
+            try:
+                self.think()
+            except Exception as exc:  # the analyst failing must never stop syncs or sales
+                self.order_error = f'AI analyst failed this round: {type(exc).__name__}: {exc}'
             try:
                 self.auto()
             except Exception as exc:  # the sync loop must outlive one bad order attempt

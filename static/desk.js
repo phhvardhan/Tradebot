@@ -56,7 +56,7 @@ async function refresh() {
     $('invest').textContent = usd(sum(inv)); $('invest-sub').textContent = `${inv.length} holding${inv.length === 1 ? '' : 's'}`;
     $('swing').textContent = usd(sum(sw)); $('swing-sub').textContent = `${sw.length} open`;
     $('todo').textContent = String(s.cards.length); $('todo-sub').textContent = `${s.cards.filter(c => c.passes).length} pass your limits`;
-    $('rules').textContent = `Buy a 20-day closing-high breakout, ${Number(r.per_trade) ? 'up to ' + usd(r.per_trade) : 'all cash'} a position, ${Number(r.max_new) ? r.max_new + ' new a day, ' : ''}stop −${(Number(r.stop) * 100).toFixed(0)}%, target +${(Number(r.target) * 100).toFixed(0)}%${Number(r.max_open) ? `, at most ${r.max_open} open` : ''}. Edit them on the US stocks page.`;
+    $('rules').textContent = `Buy ${!r.entry || r.entry === 'breakout_20d' ? 'a 20-day closing-high breakout' : 'on ' + r.entry.replace(/,/g, ' or ')}, ${Number(r.per_trade) ? 'up to ' + usd(r.per_trade) : 'all cash'} a position, ${Number(r.max_new) ? r.max_new + ' new a day, ' : ''}stop −${(Number(r.stop) * 100).toFixed(0)}%, target +${(Number(r.target) * 100).toFixed(0)}%${Number(r.max_open) ? `, at most ${r.max_open} open` : ''}. Edit them on the US stocks page; the AI researcher may change the strategy (see AI brain).`;
     $('checked').textContent = s.market && s.market.date ? `NYSE ${s.market.open ? 'open' : 'closed'} · ${s.market.reason || ''}` : '';
     $('cards').replaceChildren(...s.cards.map(card)); $('cards-empty').hidden = s.cards.length > 0;
     $('watch-rows').replaceChildren(...watch.map(w => el('tr', '', el('td', '', el('span', 'sym', UI.avatar(w.symbol), w.symbol)), el('td', '', w.purpose === 'swing' ? 'Swing trade' : 'Investment'),

@@ -33,6 +33,13 @@ JUMP = D('.40')  # live only: a held price this far from the last price seen, wi
 
 DEFAULT_RULES = dict(stop=D('.10'), target=D('.25'), alert_at=D('.20'), max_new=D(3))
 
+# Entry building blocks: the trader-scanner setups a recipe can buy on (rule `entry`, comma-separated, first match wins). breakout_20d is the original rule.
+ENTRIES = dict(breakout_20d='Yesterday closed above the highest of the 20 closes before it; today\'s price must still be above that level.',
+               bull_flag='Up more than 10% over the 10 sessions before the last 5, then the last 5 closes held within a 5% range.',
+               reclaim_ma20='The previous close was under its 20-day average and the last close is back above it.',
+               oversold='14-day RSI under 30.',
+               oversold_bounce='RSI was under 30 yesterday and the last close is up from the one before.')
+
 
 CLOSING_WINDOW = 10
 
@@ -52,9 +59,10 @@ class StockEngine(Runner):
     breakeven = property(lambda self: D(self.s['breakeven']))  # once up this much, never sell at a loss: the stop moves to the entry price, 0 = off
     max_sector = property(lambda self: D(self.s['max_sector']))  # most positions held in one sector, 0 = no limit
     max_open = property(lambda self: D(self.s['max_open']))  # most positions held at once, 0 = no limit
+    entry = property(lambda self: self.s['entry'])  # which scanner setups buy, 'a,b' (see ENTRIES)
 
     def __init__(self, db, quotes, symbols, capital=D('5000'), per_trade=D('500'), daily_loss=D('400'),
-                 stop=D('.20'), target=D('1'), alert_at=D('.80'), slip=D('.0005'), edge_check=None, notify=None, status=None, source='yahoo', gate=True, congress=None, congress_days=D(0), max_open=D(0), trail=D(0), max_new=D(0), exit_low=D(0), breakeven=D(0), max_sector=D(0), news=None, bench=None):
+                 stop=D('.20'), target=D('1'), alert_at=D('.80'), slip=D('.0005'), edge_check=None, notify=None, status=None, source='yahoo', gate=True, congress=None, congress_days=D(0), max_open=D(0), trail=D(0), max_new=D(0), exit_low=D(0), breakeven=D(0), max_sector=D(0), news=None, bench=None, entry='breakout_20d'):
         self.lock = threading.RLock()
         self.quotes, self.notify, self.status, self.slip = quotes, notify, status or clock.market_status, slip
         self.news, self.bench = news, bench  # (symbol) -> note, and (first trade day) -> S&P 500 return; both optional, both information only
@@ -82,17 +90,38 @@ class StockEngine(Runner):
             market={}, history=[], updated=None, status='Ready', decision='Ready. Start the agent to collect data.')
         if any(D(self.s[k]) != D(v) for k, v in fixed.items()):
             raise ValueError('Database capital or slippage differs. Use a new --db path for different settings.')
-        for k, v in dict(per_trade=per_trade, daily_loss=daily_loss, stop=stop, target=target, alert_at=alert_at, symbols=list(symbols), gate=gate, congress_days=congress_days, max_open=max_open, trail=trail, max_new=max_new, exit_low=exit_low, breakeven=breakeven, max_sector=max_sector).items():
+        for k, v in dict(per_trade=per_trade, daily_loss=daily_loss, stop=stop, target=target, alert_at=alert_at, symbols=list(symbols), gate=gate, congress_days=congress_days, max_open=max_open, trail=trail, max_new=max_new, exit_low=exit_low, breakeven=breakeven, max_sector=max_sector, entry=entry).items():
             self.s.setdefault(k, v if k in ('symbols', 'gate') else str(v))  # a saved choice from the dashboard wins
         self.save()
 
     def rules(self):
-        return dict(capital=D(self.s['capital']), slip=self.slip, **{k: getattr(self, k) for k in ('per_trade', 'daily_loss', 'stop', 'target', 'alert_at', 'max_open', 'trail', 'max_new', 'congress_days', 'exit_low', 'breakeven', 'max_sector')})
+        return dict(capital=D(self.s['capital']), slip=self.slip, entry=self.entry, **{k: getattr(self, k) for k in ('per_trade', 'daily_loss', 'stop', 'target', 'alert_at', 'max_open', 'trail', 'max_new', 'congress_days', 'exit_low', 'breakeven', 'max_sector')})
 
-    def set_rules(self, body):
-        """Change rules from the dashboard. Returns an error message, or None once saved."""
+    def signal(self, closes):
+        """The first entry setup of the recipe that the closes (oldest first) show, or None."""
+        tags = scan.find_setups(closes)[0] if len(closes) >= 30 else []
+        return next((t for t in self.entry.split(',') if t in tags), None)
+
+    def set_rules(self, body, who='dashboard'):
+        """Change rules from the dashboard (or the AI researcher, who='ai'). Returns an error message, or None once saved."""
         if self.s.get('frozen'):
             return 'These rules are frozen for the challenger test.'
+        new, error = self.check_rules(body)
+        if error:
+            return error
+        with self.lock:
+            log = self.s.setdefault('rule_log', [])
+            for k, v in new.items():
+                if self.s.get(k) != v:
+                    log.append(dict(at=time.time(), text=f'{k}: {self.s.get(k)} → {v}' + (' (AI researcher)' if who == 'ai' else '')))
+            self.s['rule_log'] = log[-100:]
+            self.s.update(new)
+            self.edge, self.edge_gen = None, self.edge_gen + 1  # replay the new rules at the next check; a replay still running on the old ones is dropped
+            self.save()
+
+    @staticmethod
+    def check_rules(body):
+        """Validate a rules change without saving it: (the values as stored, None) or (None, the error message)."""
         checks = dict(per_trade=(lambda x: x >= 0, 'Per position must be 0 (no limit) or more'),
                       daily_loss=(lambda x: x >= 0, 'Daily loss limit must be 0 (off) or more'),
                       stop=(lambda x: 0 < x < 1, 'Stop must be between 0% and 100%'),
@@ -108,33 +137,30 @@ class StockEngine(Runner):
         new = {}
         try:
             for k, v in body.items():
-                if k in checks:
+                if k == 'entry':
+                    tags = [t.strip() for t in (v.split(',') if isinstance(v, str) else v)]
+                    if not 1 <= len(tags) <= len(ENTRIES) or any(t not in ENTRIES for t in tags) or len(set(tags)) != len(tags):
+                        return None, 'Entry must be one or more of: ' + ', '.join(ENTRIES) + '.'
+                    new[k] = ','.join(tags)
+                elif k in checks:
                     x = D(str(v))
                     if not x.is_finite() or not checks[k][0](x):
-                        return checks[k][1] + '.'
+                        return None, checks[k][1] + '.'
                     new[k] = str(x)
                 elif k == 'symbols':
                     if not isinstance(v, list):
-                        return 'Watchlist must be a list of symbols.'
+                        return None, 'Watchlist must be a list of symbols.'
                     syms = list(dict.fromkeys(str(s).strip().upper() for s in v if str(s).strip()))
                     if not 1 <= len(syms) <= 40 or not all(re.fullmatch(r'[A-Z0-9][A-Z0-9.-]{0,9}', s) for s in syms):
-                        return 'Watchlist needs 1 to 40 symbols, letters, digits, dot or dash only.'
+                        return None, 'Watchlist needs 1 to 40 symbols, letters, digits, dot or dash only.'
                     new[k] = syms
                 elif k == 'gate':
                     new[k] = v is True
                 else:
-                    return f'Unknown rule: {k}.'
+                    return None, f'Unknown rule: {k}.'
         except (InvalidOperation, TypeError, AttributeError):
-            return 'Rules must be numbers.'
-        with self.lock:
-            log = self.s.setdefault('rule_log', [])
-            for k, v in new.items():
-                if self.s.get(k) != v:
-                    log.append(dict(at=time.time(), text=f'{k}: {self.s.get(k)} → {v}'))
-            self.s['rule_log'] = log[-100:]
-            self.s.update(new)
-            self.edge, self.edge_gen = None, self.edge_gen + 1  # replay the new rules at the next check; a replay still running on the old ones is dropped
-            self.save()
+            return None, 'Rules must be numbers.'
+        return new, None
 
     def save(self):
         self.conn.execute('INSERT OR REPLACE INTO state VALUES (1, ?)', (json.dumps(self.s),))
@@ -188,10 +214,10 @@ class StockEngine(Runner):
         n = int(self.exit_low)
         return D(str(min(c for _, c in q['closes'][-n:]))) if q and len(q['closes']) >= n else None
 
-    def price_block(self, q):
-        # The signal is yesterday's close; make sure today's price still agrees with it.
+    def price_block(self, q, setup='breakout_20d'):
+        # The signal is yesterday's close; make sure today's price still agrees with it (a breakout: still above its level; every setup: no gap chase).
         level, close, price = max(D(str(c)) for _, c in q['closes'][-21:-1]), D(str(q['closes'][-1][1])), q['price']
-        if price < level:
+        if setup == 'breakout_20d' and price < level:
             return f'Signal, but price {price:.2f} is back under the breakout level {level:.2f}.'
         if price > close * (1 + GAP):
             return f'Signal, but price {price:.2f} gapped over {GAP:.0%} above the {close:.2f} close; not chasing.'
@@ -292,12 +318,12 @@ class StockEngine(Runner):
             if len(q['closes']) < 30:
                 decisions[sym] = 'Not enough daily history.'
                 continue
-            tags, _ = scan.find_setups([c for _, c in q['closes']])
+            setup = self.signal([c for _, c in q['closes']])
             signal_day = str(q['closes'][-1][0])
-            if 'breakout_20d' not in tags:
-                decisions[sym] = 'No signal: last close is not above its 20-day closing high.'
+            if not setup:
+                decisions[sym] = 'No signal: last close is not above its 20-day closing high.' if self.entry == 'breakout_20d' else f'No signal: none of {self.entry.replace(",", ", ")}.'
             elif not trading:
-                decisions[sym] = 'Signal: 20-day breakout. Market closed; entry waits for the open.'
+                decisions[sym] = ('Signal: 20-day breakout.' if setup == 'breakout_20d' else f'Signal: {setup}.') + ' Market closed; entry waits for the open.'
             elif self.daily_loss and today <= -self.daily_loss:
                 decisions[sym] = f'Signal, but entries blocked: down ${-today:.2f} today (limit ${self.daily_loss:.0f}).'
             elif self.max_new and sum(v == day for v in s['last_entry'].values()) >= self.max_new:
@@ -312,12 +338,12 @@ class StockEngine(Runner):
                 decisions[sym] = why
             elif max(s['last_entry'].get(sym, ''), s['last_exit'].get(sym, '')) >= signal_day:
                 decisions[sym] = 'Signal already used; waiting for a new breakout.'
-            elif why := self.price_block(q):
+            elif why := self.price_block(q, setup):
                 decisions[sym] = why
             else:
                 px, before = q['price'], (self.prev or {}).get(sym)
                 if before is not None:  # replay: the path moved into the entry window between two samples, so it entered at the window's edge
-                    lo, top = max(D(str(c)) for _, c in q['closes'][-21:-1]), D(str(q['closes'][-1][1])) * (1 + GAP)
+                    lo, top = max(D(str(c)) for _, c in q['closes'][-21:-1]) if setup == 'breakout_20d' else D(0), D(str(q['closes'][-1][1])) * (1 + GAP)
                     px = lo if before < lo else top if before > top else px
                 fill = px * (1 + self.slip)
                 qty = (min(self.per_trade or cash, cash) / fill).quantize(D('.0001'), rounding=ROUND_DOWN)  # the cap, or whatever cash is left
@@ -328,9 +354,10 @@ class StockEngine(Runner):
                 cash -= cost
                 pos[sym] = dict(qty=str(qty), entry=str(fill), cost=str(cost), last=str(q['price']), opened=day, alerted=False)
                 s['last_entry'][sym] = day
-                decisions[sym] = reason = f'Buy: close {q["closes"][-1][1]:.2f} broke the 20-day high.' + (f' {note}' if self.news and (note := self.news(sym)) else '')
+                why = f'close {q["closes"][-1][1]:.2f} broke the 20-day high.' if setup == 'breakout_20d' else f'{setup} on the {q["closes"][-1][1]:.2f} close.'
+                decisions[sym] = reason = f'Buy: {why}' + (f' {note}' if self.news and (note := self.news(sym)) else '')
                 self.trade(sym, 'BUY', qty, fill, D(0), reason)
-                self.rec('BUY', sym, q['price'], None, reason, signal_close=q['closes'][-1][1], breakout_level=max(c for _, c in q['closes'][-21:-1]))
+                self.rec('BUY', sym, q['price'], None, reason, setup=setup, signal_close=q['closes'][-1][1], breakout_level=max(c for _, c in q['closes'][-21:-1]))
         for sym, d in decisions.items():  # a signal that did not become a trade is a decision too
             if d.startswith('Signal') and self.last_dec.get(sym) != d:
                 self.rec('SIGNAL_BLOCKED' if 'blocked' in d or 'not chasing' in d or 'back under' in d or 'cash' in d else 'SIGNAL', sym, quotes[sym]['price'] if sym in quotes else None, None, d)
@@ -379,7 +406,7 @@ class StockEngine(Runner):
                 self.refresh_edge(status['date'])
                 if self.news:  # fetch headlines for fresh signals before taking the lock, so a slow feed never stalls the dashboard
                     for sym, q in quotes.items():
-                        if sym not in self.s['positions'] and len(q['closes']) >= 30 and 'breakout_20d' in scan.find_setups([c for _, c in q['closes']])[0]:
+                        if sym not in self.s['positions'] and self.signal([c for _, c in q['closes']]):
                             self.news(sym)
             self.gate_now = self.edge_block() or ''  # read once: a replay finishing mid-check must not let one portfolio in and keep the other out
             for f in self.followers:
@@ -574,7 +601,7 @@ def saved_rules(db):
         body = json.loads(sqlite3.connect(f'file:{db}?mode=ro', uri=True).execute('SELECT body FROM state WHERE id=1').fetchone()[0])
     except Exception:
         return {}
-    return {k: D(body[k]) for k in ('stop', 'target', 'alert_at', 'trail', 'max_open', 'max_new', 'congress_days', 'per_trade', 'daily_loss', 'breakeven', 'max_sector') if k in body}
+    return {**{k: D(body[k]) for k in ('stop', 'target', 'alert_at', 'trail', 'max_open', 'max_new', 'congress_days', 'per_trade', 'daily_loss', 'breakeven', 'max_sector', 'exit_low') if k in body}, **({'entry': body['entry']} if 'entry' in body else {})}
 
 def minutes_to_close(status):
     """Minutes from now (New York) to the close; 0 where there is no close (crypto), 999 if the clock cannot be read."""

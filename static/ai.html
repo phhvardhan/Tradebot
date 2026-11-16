@@ -1,0 +1,32 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Signal Desk · AI brain</title><link rel="stylesheet" href="/style.css"></head><body><div class="app"><div class="main">
+<header class="top"><div class="top-title"><h1>AI brain</h1><p id="mode">Trade analyst and strategy researcher</p></div>
+<div class="controls"><span id="status">Connecting…</span><button type="button" id="rollback" hidden>Undo last change</button><button type="button" id="research" class="primary">Run research now</button></div></header>
+<main class="content">
+<div id="error" class="banner" role="alert" hidden></div>
+<div id="setup" class="banner" hidden>The AI is off: put <code>OPENROUTER_API_KEY=…</code> in <code>.env</code> (optional: <code>OPENROUTER_MODEL</code>). No restart needed. Until then the rules decide alone, exactly as before.</div>
+
+<section class="card hero" aria-label="Scorecard">
+<div class="hero-head"><div><p class="label">Did the AI help?</p><span id="headline" class="val num">—</span><p id="headline-sub" class="hero-read">—</p></div></div>
+<div class="kpis">
+<div class="kpi"><span class="label">Strategy changes</span><span id="k-changes" class="val num">—</span><span id="k-changes-sub" class="sub">—</span></div>
+<div class="kpi"><span class="label">Buys reviewed</span><span id="k-reviews" class="val num">—</span><span id="k-reviews-sub" class="sub">—</span></div>
+<div class="kpi"><span class="label">Approved, since review</span><span id="k-approved" class="val num">—</span><span id="k-approved-sub" class="sub">average move</span></div>
+<div class="kpi"><span class="label">Vetoed, since review</span><span id="k-vetoed" class="val num">—</span><span id="k-vetoed-sub" class="sub">average move</span></div>
+</div></section>
+
+<section class="card"><h2 class="card-title">Strategy now<span class="sub" id="recipe-sub">the recipe the swing agent and Alpaca buys follow</span></h2>
+<dl id="recipe" class="ai-recipe"></dl>
+<p id="locked" class="dim sub"></p></section>
+
+<section class="card"><h2 class="card-title">Research sessions<span class="sub">weekly, or Run research now · each change goes live at once and can be undone</span></h2>
+<div id="runs" class="stack"></div><p id="runs-empty" class="dim">No research yet.</p></section>
+
+<section class="card"><h2 class="card-title">Trade analyst<span class="sub">every Alpaca buy is reviewed once a day before it can pass</span></h2>
+<div class="wrap"><table class="grid"><thead><tr><th>When</th><th>Stock</th><th>Verdict</th><th>Why</th><th>Price then</th></tr></thead><tbody id="review-rows"></tbody></table></div>
+<p id="reviews-empty" class="dim">No buys reviewed yet. The analyst looks at a buy card on Action needed once its other checks pass.</p></section>
+
+<footer>The analyst sees the setup, recent closes, 48 hours of Yahoo headlines and recent House filings; it cannot see the future, and its record above is measured on later prices.
+The researcher judges recipes on a 5-year replay of a watchlist picked with hindsight, so replay numbers are biased upward. It cannot change the amount per trade, the daily loss limit or new buys a day,
+and orders go to the Alpaca paper account only. Costs are what OpenRouter reported. Not investment advice.</footer>
+</main></div></div>
+<script src="/ui.js"></script><script src="/ai.js"></script></body></html>

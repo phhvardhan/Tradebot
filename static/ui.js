@@ -30,11 +30,12 @@ const UI = (() => {
 <symbol id="n-crypto" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M9.5 7.5h3.8a2 2 0 0 1 0 4H9.5h4.3a2 2 0 0 1 0 4H9.5M11 5.5v2M11 15.5v2"/></symbol>
 <symbol id="n-day" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
 <symbol id="n-funds" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-9-9"/><path d="M12 3a9 9 0 0 1 9 9h-9z"/></symbol>
+<symbol id="n-ai" viewBox="0 0 24 24"><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><rect x="7" y="7" width="10" height="10" rx="2"/><path d="M10 10h4v4h-4z"/></symbol>
 <symbol id="n-desk" viewBox="0 0 24 24"><path d="M9 6h12M9 12h12M9 18h12"/><path d="m3 6 1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17"/></symbol>
 </defs></svg>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true"><filter id="goo" x="-20%" y="-60%" width="140%" height="220%" color-interpolation-filters="sRGB"><feGaussianBlur in="SourceGraphic" stdDeviation="5"/><feColorMatrix values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 20 -8"/></filter></svg>`;
 
-  const MARKETS = [['desk', 'Action needed', 'n-desk'], ['stocks', 'US stocks', 'n-stocks'], ['crypto', 'Crypto', 'n-crypto'], ['day', 'Day trades', 'n-day'], ['funds', 'Funds', 'n-funds']];
+  const MARKETS = [['desk', 'Action needed', 'n-desk'], ['stocks', 'US stocks', 'n-stocks'], ['crypto', 'Crypto', 'n-crypto'], ['day', 'Day trades', 'n-day'], ['funds', 'Funds', 'n-funds'], ['ai', 'AI brain', 'n-ai']];
   function shell(market) {
     document.body.insertAdjacentHTML('afterbegin', SPRITE);
     const nav = el('nav', 'side-nav'); nav.setAttribute('aria-label', 'Markets'); nav.append(el('span', 'side-h', 'Markets'));

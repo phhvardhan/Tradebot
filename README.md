@@ -17,6 +17,7 @@ Or double-click `Start Signal Desk.command`.
       swing.py             the 20-day-breakout engine (stocks and crypto), the replay, the frozen challenger
       desk.py              the decision desk: the read-only account import (CSV) and the Action-needed cards built from the swing rules
       day.py               the opening-range-breakout day trader
+      brain.py             the AI brain (OpenRouter): trade analyst on every Alpaca buy, strategy researcher that reworks the stock recipe
       funds.py             paper SIPs into Indian and US mutual funds
       congress.py news.py  House filings and headlines used as entry filter and notes
       account.py           optional read-only exchange balances
@@ -45,12 +46,27 @@ Or double-click `Start Signal Desk.command`.
   A buy is a bracket order: whole shares at market, with the stop and target placed at Alpaca as orders that stay open until filled or cancelled, so they work even when this computer is off;
   the lot is then tagged swing and gets no sell card from here. A sale (for a swing lot you tagged by hand) is a market order, refused while Alpaca has open orders on it.
   The server re-checks the card before sending, one order per symbol, side and day; orders go to paper-api.alpaca.markets whatever .env says. Every attempt is in `data/orders-alpaca.jsonl`.
-  The US stocks, crypto, day-trade and funds pages stay fully simulated and never reach Alpaca.
+  The US stocks, crypto and funds pages stay fully simulated; day trades place their own Alpaca paper orders (below).
 - Tag a lot: `python3 -m signaldesk.desk tag AAPL swing --entry 100 --stop 90 --target 125` (or `tag AAPL invest`). An investment and a swing trade can share a ticker; swing
   exits (stop, target) apply only to lots tagged swing. Investments are never sold by a swing rule. A tag survives re-imports while the holding stays open; selling out and buying again drops it.
 - Each card shows the trigger, the quote and its time, the proposed size, the planned stop and target, the estimated loss at the stop (an estimate: a stop can fill lower),
   and every check it passed or failed: open swing trade on it, new buys today, open positions, sector, price back under the level, the replay gate, the Congress filter, cash, market open.
   The rules are the stock agent's (Edit rules on `/stocks`); the breakout test is the same one the paper agent runs, on the closes it saved. Nothing is placed from the desk.
+
+## AI brain (`/ai`)
+Put `OPENROUTER_API_KEY` in `.env` (and optionally `OPENROUTER_MODEL`, default `anthropic/claude-opus-5.5`); it is read on every use, so no restart.
+Without it nothing changes: the rules decide alone. Design: `docs/superpowers/specs/2026-11-16-ai-brain-design.md`. Code: `signaldesk/brain.py`.
+- **Trade analyst.** A buy card on Action needed whose other checks all pass is sent to the model once per symbol and day: the setup, the last 30 closes,
+  48 hours of Yahoo headlines and recent House filings. It answers approve or veto with a confidence, reasons, risks and sources (a JSON schema; an answer
+  outside it is an error). Approval is one more check on the card, so in Automatic mode only approved buys are placed. A failed call fails the card and is
+  retried at the next 5-minute check. Live only: the simulated US stocks book runs the same recipe without it, as the control.
+- **Strategy researcher.** Weekly, or Run research now. The strategy is a recipe of building blocks the engine already runs: entry setups
+  (`breakout_20d`, `bull_flag`, `reclaim_ma20`, `oversold`, `oversold_bounce`, from the trader-scanner), stop, target, trailing stop, break-even, channel exit,
+  Congress filter, most open, most per sector, watchlist. The model tests recipes with `run_replay` (the same 5-year replay as the gate, at most 12 a session)
+  and calls `finish`: adopt (live at once, through the dashboard's rule checks) or keep. It never writes code and cannot change the amount per trade,
+  the daily loss limit, new buys a day or the replay gate. The last change can be undone from the page.
+- **Record.** Every review and session is a line in `data/ai-log.jsonl` (inputs, answer, tested recipes, model, tokens, cost). The page's scorecard compares
+  the later price move of approved vs vetoed buys, the replay before vs after each change and the simulated book since, and what the AI cost.
 
 ## Markets
 - `/stocks` and `/crypto` (paper): buy when yesterday's close is above the 20 closes before it **and** today's price is still above that level
