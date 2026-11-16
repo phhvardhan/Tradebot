@@ -46,7 +46,9 @@ function render(s) {
   UI.controls('day', s, pending); $('edit-rules').disabled = false;
   const m = s.market || {}; UI.clock(m);
   $('mode').textContent = 'Opening-range breakout · Yahoo 5-minute bars · ' + (s.alpaca ? 'orders at Alpaca paper' : 'simulated fills');
-  $('foot').textContent = s.alpaca ? 'Every buy and sell is a real order on your Alpaca paper account: a bracket buy (whole shares) whose stop and target stand at Alpaca, a market sale at the flat-by time. Prices in the journal are Alpaca\'s fills. Signals use free Yahoo 5-minute bars, checked once a minute. Long only. Not investment advice.' : FOOT;
+  $('eq-label').textContent = s.alpaca ? 'Day budget · Alpaca paper' : 'Account value';
+  $('price-h').textContent = s.alpaca ? 'Fill' : 'Price';
+  $('foot').textContent = s.alpaca ? 'Every buy and sell is a real order on your Alpaca paper account: a bracket buy (whole shares) whose stop and target stand at Alpaca, a market sale at the flat-by time. Journal rows tagged Alpaca carry Alpaca\'s fill prices; untagged rows are from before, when fills were simulated. Signals use free Yahoo 5-minute bars, checked once a minute. Long only. Not investment advice.' : FOOT;
   const eq = Number(s.equity), cap = Number(s.capital), today = eq - Number(s.day_start), pos = Object.entries(s.positions), tradesToday = Object.values(s.traded).filter(d => d === s.day).length;
   const held = pos.length, age = s.updated ? Date.now() / 1000 - s.updated : 0;
   const warn = !s.running && held ? `Agent is paused with ${held} open day trade${held > 1 ? 's' : ''}: the stop, target and flat-by sale are NOT being checked. Press Start.`
@@ -63,12 +65,12 @@ function render(s) {
   const sells = s.trades.filter(t => t.side === 'SELL'), wins = sells.filter(t => Number(t.pnl) > 0).length;
   $('realized').textContent = signed(s.realized); tone($('realized'), s.realized); $('record').textContent = sells.length ? `${wins} of ${sells.length} closed trades won` : 'no closed trades yet';
   $('decision').textContent = (!s.running ? 'Paused: no checks, no exits, no flat-by sale until you press Start. ' : '') + (s.decision || '');
-  $('connection').textContent = m.now_new_york ? `${m.now_new_york} New York · ${m.open ? 'regular session' : m.reason}` : '';
+  $('connection').textContent = (m.now_new_york ? `${m.now_new_york} New York · ${m.open ? 'regular session' : m.reason}` : '') + (s.alpaca ? ' · orders go to Alpaca paper' : ' · simulated fills');
   const pr = $('pos-rows'); pr.replaceChildren(); $('pos-empty').hidden = held > 0;
   for (const [sym, p] of pos) {
     const entry = Number(p.entry), risk = entry - Number(p.stop0), r = risk ? (Number(p.last) - entry) / risk : 0, pnl = (Number(p.last) - entry) * Number(p.qty);
     pr.append(el('div', 'row pos', logo(sym),
-      el('span', 'r-name', el('strong', '', `${sym} · ${NAMES[sym] || ''}`), el('span', '', `${n2(p.qty, 4)} shares at ${n2(entry)} · ${s.decisions[sym] || ''}`)),
+      el('span', 'r-name', el('strong', '', `${sym} · ${NAMES[sym] || ''}`), el('span', '', `${Number(p.qty) % 1 ? n2(p.qty, 4) : Number(p.qty)} shares at ${n2(entry)}${p.alpaca ? ' · stop and target are orders at Alpaca' : ''} · ${s.decisions[sym] || ''}`)),
       el('span', 'r-num', el('strong', 'num', n2(p.last)), tone(el('span', 'num', `${signed(pnl)} · ${r >= 0 ? '+' : '−'}${Math.abs(r).toFixed(2)}R`), pnl)),
       el('span', 'badge ' + (r >= 0 ? 'up' : 'down'), p.be ? 'Break-even on' : 'Open'), rtrack(p)));
   }
@@ -84,14 +86,14 @@ function render(s) {
   const r = s, list = $('rules-list'); list.replaceChildren();
   for (const [k, v] of [['Opening range', `first ${r.or_minutes} min`], ['Enter when', `5-min close > range high, before ${r.entries_until}`], ['Stop', 'middle of the range'], ['Target', `${r.reward_risk}× the risk`],
       ['Break-even', Number(r.breakeven_r) ? `stop to entry at +${r.breakeven_r}R` : 'Off'], ['Max loss per trade', usd(r.risk)], ['Per position', Number(r.per_trade) ? `≤ ${usd(r.per_trade)}` : 'No cap'],
-      ['Trades per day', Number(r.max_trades) || 'No limit'], ['Daily loss limit', Number(r.daily_loss) ? usd(r.daily_loss) : 'Off'], ['Flat by', r.flat_by], ['Slippage', '0.05% each way']])
+      ['Trades per day', Number(r.max_trades) || 'No limit'], ['Daily loss limit', Number(r.daily_loss) ? usd(r.daily_loss) : 'Off'], ['Flat by', r.flat_by], ...(s.alpaca ? [['Orders', 'Alpaca paper: bracket buy, market sale'], ['Fills', "Alpaca's prices"]] : [['Slippage', '0.05% each way']])])
     list.append(el('dt', '', k), el('dd', '', String(v)));
   const rl = $('rl-list'); rl.replaceChildren(); $('rl-empty').hidden = (s.rule_log || []).length > 0;
   for (const x of (s.rule_log || []).slice(-8).reverse()) rl.append(el('li', '', `${when(x.at)} · ${x.text}`));
   const rows = $('rows'); rows.replaceChildren(); $('empty').hidden = s.trades.length > 0; $('count').textContent = s.trades.length ? `${s.trades.length}${s.more ? '+' : ''} trades` : '';
   for (const t of s.trades) {
     const tr = rows.insertRow(); tr.insertCell().textContent = when(Date.parse(t.time) / 1000); tr.insertCell().append(el('span', 'sym', logo(t.symbol), t.symbol)); tr.cells[1].className = 'side';
-    const sd = tr.insertCell(); sd.textContent = t.side; sd.className = 'side ' + (t.side === 'SELL' ? 'down' : 'up'); tr.insertCell().textContent = n2(t.qty, 4); tr.insertCell().textContent = n2(t.price);
+    const sd = tr.insertCell(); sd.textContent = t.side; sd.className = 'side ' + (t.side === 'SELL' ? 'down' : 'up'); if (/Alpaca/.test(t.reason)) sd.append(el('span', 'where-tag', 'Alpaca')); tr.insertCell().textContent = n2(t.qty, 4); tr.insertCell().textContent = n2(t.price);
     const pl = tr.insertCell(); pl.textContent = t.side === 'SELL' ? signed(t.pnl) : ''; tone(pl, t.side === 'SELL' ? Number(t.pnl) : 0);
     const rs = tr.insertCell(); rs.textContent = t.reason; rs.className = 'reason';
   }

@@ -52,6 +52,17 @@ const UI = (() => {
     let saved = null; try { saved = localStorage.getItem('mode'); } catch {}
     setTheme(saved === 'light' ? 'light' : 'dark');
     tickClock(); setInterval(tickClock, 15000);
+    route();
+  }
+  // Tag each market with where its trades go: Alpaca paper orders (desk swing buys, day trades) or a simulated book.
+  const ROUTE = {desk: ['Alpaca', 'Swing orders go to your Alpaca paper account'], day: ['Alpaca', 'Day trades are orders on your Alpaca paper account'],
+    stocks: ['Sim', 'Simulated book; Action needed places its signals at Alpaca'], crypto: ['Sim', 'Simulated fills'], funds: ['Sim', 'Simulated SIPs']};
+  async function route() {
+    let on = false; try { on = !!(await (await fetch('/api/desk/state')).json()).agent.connected; } catch {}
+    for (const [id, [where, why]] of Object.entries(ROUTE)) {
+      const a = document.getElementById('nav-' + id), live = on && where === 'Alpaca';
+      if (!a) continue; const t = el('span', 'where' + (live ? ' on' : ''), live ? 'Alpaca' : 'Sim'); t.title = live ? why : on ? why : 'Simulated: Alpaca keys are not set'; a.append(t);
+    }
   }
   function svgIcon(name, cls = '') {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg'), use = document.createElementNS('http://www.w3.org/2000/svg', 'use');

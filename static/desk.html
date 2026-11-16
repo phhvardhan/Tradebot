@@ -25,7 +25,7 @@
 <label>No new buys once down ($)<input id="a-daily_loss" type="number" min="0" step="any" inputmode="decimal" required><small>Today, at Alpaca. 0 = off.</small></label>
 <div class="agent-save"><button type="submit">Save limits</button><span id="agent-msg" class="dim sub" role="status"></span></div>
 </form>
-<p class="dim sub">A buy is a bracket order: whole shares at market, with the stop and target from the US stocks rules placed at Alpaca as orders that stay open until filled or cancelled, so they work even when this computer is off. Proposals, checks and limits are the cards below.</p>
+<p class="dim sub">A buy is a bracket order: whole shares at market, with the stop and target from the US stocks rules placed at Alpaca as orders that stay open until filled or cancelled, so they work even when this computer is off. Proposals, checks and limits are the cards below. Day trades also place their own orders at Alpaca (see Day trades); both appear in the orders list.</p>
 <div class="wrap"><table class="grid"><thead><tr><th>Sent</th><th>Order</th><th>How</th><th>Result</th></tr></thead><tbody id="order-rows"></tbody></table></div>
 <p id="orders-empty" class="dim">No orders sent yet.</p>
 </section>

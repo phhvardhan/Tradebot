@@ -362,7 +362,7 @@ async function refresh() {
     const capital = Number(s.capital), eq = Number(s.equity), m = s.market || {};
     const pos = Object.entries(s.positions), invested = pos.reduce((a, [, p]) => a + Number(p.qty) * Number(p.last), 0);
     const cost = pos.reduce((a, [, p]) => a + Number(p.cost), 0), today = eq - Number(s.day_start), open = invested - cost;
-    $('mode').textContent = m.name === 'Crypto' ? `20-day breakout on daily candles · Coinbase · ${m.reason} · UTC ${m.now_utc}` : m.date ? `20-day breakout · NYSE ${m.open ? 'open' : 'closed'}, ${m.reason} · New York ${m.now_new_york}${m.open ? '' : m.next_open ? ` · next open ${m.next_open}` : ''}` : '20-day breakout · no market check yet.';
+    $('mode').textContent = m.name === 'Crypto' ? `20-day breakout on daily candles · Coinbase · simulated · ${m.reason} · UTC ${m.now_utc}` : m.date ? `20-day breakout · simulated · Alpaca orders via Action needed · NYSE ${m.open ? 'open' : 'closed'}, ${m.reason} · New York ${m.now_new_york}${m.open ? '' : m.next_open ? ` · next open ${m.next_open}` : ''}` : '20-day breakout · no market check yet.';
     UI.clock(CRYPTO ? null : m);
     odo('equity', usd(eq)); $('return').textContent = `${pct(eq / capital - 1, 2)} from ${usd(capital)}`; tone($('return'), eq - capital);
     odo('today', signed(today)); tone($('today'), today);

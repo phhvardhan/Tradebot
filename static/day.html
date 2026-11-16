@@ -5,7 +5,7 @@
 <div id="error" class="banner" role="alert" hidden></div><div id="alerts" class="banner" role="status" hidden></div>
 
 <section class="card hero" aria-label="Account">
-<div class="hero-head"><div><p class="label">Account value</p><span id="equity" class="val num">—</span><p id="return" class="hero-read num">—</p></div>
+<div class="hero-head"><div><p class="label" id="eq-label">Account value</p><span id="equity" class="val num">—</span><p id="return" class="hero-read num">—</p></div>
 <div style="text-align:right"><p class="label" style="justify-content:flex-end">Session</p><p id="clockline" class="sub" style="margin-top:6px"></p><p id="updated" class="dim sub"></p></div></div>
 <div class="session" id="session" aria-hidden="true"></div>
 <div class="session-legend"><span><i style="background:var(--warn)"></i>Opening range</span><span><i style="background:var(--up)"></i>Entry window</span><span><i style="background:var(--rule-2)"></i>Hold, manage exits</span><span><i style="background:var(--down)"></i>Flat before the close</span></div>
@@ -30,7 +30,7 @@
 </section>
 
 <section class="card journal"><div class="head"><h2>Journal</h2><span id="count" class="dim"></span><span class="grow"></span><a href="/api/day/export" class="link" download="day-trades.csv">Export CSV</a></div>
-<div class="wrap"><table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th><th>P&amp;L</th><th>Reason</th></tr></thead><tbody id="rows"></tbody></table></div><p id="empty" class="dim">No day trades yet.</p></section>
+<div class="wrap"><table><thead><tr><th>Time</th><th>Symbol</th><th>Side</th><th>Qty</th><th id="price-h">Price</th><th>P&amp;L</th><th>Reason</th></tr></thead><tbody id="rows"></tbody></table></div><p id="empty" class="dim">No day trades yet.</p></section>
 <footer id="foot">Paper trading only: no broker, no live orders. Bars and prices are free Yahoo 5-minute data and can lag; fills are simulated at the quote plus 0.05% slippage. Checks run once a minute, so a stop can fill well past its level. Long only. Not investment advice.</footer>
 </main></div></div>
 <dialog id="rules" aria-labelledby="rules-title"><form id="rules-form" method="dialog" class="rules-form">
